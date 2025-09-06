@@ -309,8 +309,7 @@ static int test_all_gather(pg_handle_t process_group, int process_rank, int num_
                               send_data,
                               recv_data,
                               TEST_DATA_SIZE,
-                              PG_DATATYPE_DOUBLE,
-                              PG_OPERATION_SUM); // Unused for all-gather
+                              PG_DATATYPE_DOUBLE);
     
     double end_time = get_time_microseconds();
     double elapsed_ms = (end_time - start_time) / 1000.0;
@@ -388,27 +387,21 @@ int main(int argc, char *argv[]) {
     
     printf("=== Running RDMA Connectivity Test ===\n");
   
-  /* Test basic RDMA connectivity first */
-  printf("[Process %d] Testing RDMA connectivity...\n", my_index);
-  if (pg_test_rdma_connectivity(process_group) == PG_SUCCESS) {
-    printf("[Process %d] RDMA connectivity test PASSED\n", my_index);
-    
-    printf("=== Running Collective Operation Tests ===\n");
+    /* Test basic RDMA connectivity first */
+    printf("[Process %d] Testing RDMA connectivity...\n", my_index);
+    if (pg_test_rdma_connectivity(process_group) == PG_SUCCESS) {
+        printf("[Process %d] RDMA connectivity test PASSED\n", my_index);
+        
+        printf("=== Running Collective Operation Tests ===\n");
 
-    /* Test all-reduce operation */
-    printf("[Process %d] Testing all-reduce operation...\n", my_index);
-    if (pg_all_reduce(process_group, send_data, result_data, data_count,
-                      PG_DATATYPE_INT, PG_OPERATION_SUM) == PG_SUCCESS) {
-      printf("[Process %d] All-reduce operation completed successfully\n", my_index);
-      test_results = 0;
+        // Test 1: All-Reduce
+        if (test_all_reduce(process_group, my_index, num_processes) != 0) {
+            test_results = -1;
+        }
     } else {
-      printf("[Process %d] All-reduce operation failed\n", my_index);
-      test_results = -1;
-    }
-  } else {
-    printf("[Process %d] RDMA connectivity test FAILED - skipping collective operations\n", my_index);
-    test_results = -1;
-  } 
+        printf("[Process %d] RDMA connectivity test FAILED - skipping collective operations\n", my_index);
+        test_results = -1;
+    } 
     
     // Small delay between tests
     sleep(1);
