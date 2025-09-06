@@ -240,9 +240,9 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       int right_neighbor = (rank + 1) % world_size;
 
       rdma_qp_bootstrap_info_t left_remote, right_remote;
-      left_remote.queue_pair_number = rank_infos[left_neighbor].qp_right;
+      left_remote.queue_pair_number = rank_infos[left_neighbor].qp_left;
       left_remote.local_identifier = rank_infos[left_neighbor].lid;
-      right_remote.queue_pair_number = rank_infos[right_neighbor].qp_left;
+      right_remote.queue_pair_number = rank_infos[right_neighbor].qp_right;
       right_remote.local_identifier = rank_infos[right_neighbor].lid;
 
       if (send(client_sockets[rank], &left_remote, sizeof(left_remote), 0) != sizeof(left_remote) ||
@@ -262,9 +262,9 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     int left_neighbor = world_size - 1;
     int right_neighbor = 1;
 
-    left_remote_info.queue_pair_number = rank_infos[left_neighbor].qp_right;
+    left_remote_info.queue_pair_number = rank_infos[left_neighbor].qp_left;
     left_remote_info.local_identifier = rank_infos[left_neighbor].lid;
-    right_remote_info.queue_pair_number = rank_infos[right_neighbor].qp_left;
+    right_remote_info.queue_pair_number = rank_infos[right_neighbor].qp_right;
     right_remote_info.local_identifier = rank_infos[right_neighbor].lid;
 
     printf(
