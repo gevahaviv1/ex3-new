@@ -143,11 +143,11 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   rdma_qp_bootstrap_info_t right_local_info, right_remote_info;
 
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->left_neighbor_qp,
+                                 process_group->right_neighbor_qp,
                                  &left_local_info);
 
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->right_neighbor_qp,
+                                 process_group->left_neighbor_qp,
                                  &right_local_info);
 
   /* Establish TCP connections for bootstrap information exchange */
