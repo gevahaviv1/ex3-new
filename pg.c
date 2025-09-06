@@ -204,9 +204,8 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
          process_group->process_rank);
   
   if (left_tcp_socket >= 0) {
-    /* Determine if we're acting as server or client for left neighbor */
-    int left_server_mode =
-        (process_group->process_rank < left_neighbor_rank) ? 1 : 0;
+    /* Use the same server/client mode as TCP connection establishment */
+    int left_server_mode = left_server;
 
     printf("[Process %d] DEBUG: Exchanging with left neighbor %d (server_mode=%d)\n", 
            process_group->process_rank, left_neighbor_rank, left_server_mode);
@@ -229,9 +228,8 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   }
 
   if (right_tcp_socket >= 0) {
-    /* Determine if we're acting as server or client for right neighbor */
-    int right_server_mode =
-        (process_group->process_rank < right_neighbor_rank) ? 1 : 0;
+    /* Use the same server/client mode as TCP connection establishment */
+    int right_server_mode = right_server;
 
     printf("[Process %d] DEBUG: Exchanging with right neighbor %d (server_mode=%d)\n", 
            process_group->process_rank, right_neighbor_rank, right_server_mode);
