@@ -272,7 +272,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     printf("[Process %d] DEBUG: Transitioning left QP to RTR with neighbor %d\n", 
            process_group->process_rank, left_neighbor_rank);
     if (rdma_transition_qp_to_rtr(
-            process_group->left_neighbor_qp, &left_remote_info,
+            process_group->left_neighbor_qp, &right_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
       fprintf(stderr, "[Process %d] ERROR: Failed to transition left QP to RTR state\n", 
               process_group->process_rank);
@@ -286,7 +286,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     printf("[Process %d] DEBUG: Transitioning right QP to RTR with neighbor %d\n", 
            process_group->process_rank, right_neighbor_rank);
     if (rdma_transition_qp_to_rtr(
-            process_group->right_neighbor_qp, &right_remote_info,
+            process_group->right_neighbor_qp, &left_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
       fprintf(stderr, "[Process %d] ERROR: Failed to transition right QP to RTR state\n", 
               process_group->process_rank);
