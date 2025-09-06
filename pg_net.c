@@ -1,12 +1,17 @@
+/* Feature test macros for gethostname and strdup */
+#define _GNU_SOURCE
+#define _POSIX_C_SOURCE 200112L
+
 #include "pg_net.h"
-#include "constants.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <netdb.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
+#include <errno.h>
 
 /*
  * =============================================================================
@@ -108,7 +113,7 @@ static int setup_bootstrap_client(const char *target_hostname, int tcp_port) {
     memset(&server_address, 0, sizeof(server_address));
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(tcp_port);
-    memcpy(&server_address.sin_addr, host_entry->h_addr, host_entry->h_length);
+    memcpy(&server_address.sin_addr, host_entry->h_addr_list[0], host_entry->h_length);
     
     /* Connect to the server */
     if (connect(client_socket, (struct sockaddr*)&server_address, 

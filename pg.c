@@ -492,7 +492,7 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
 
 int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
                   void *receive_buffer, int element_count,
-                  pg_datatype_t data_type, pg_operation_t unused_operation) {
+                  pg_datatype_t data_type, pg_operation_t unused_operation __attribute__((unused))) {
   pg_handle_internal_t *process_group =
       (pg_handle_internal_t *)process_group_handle;
 

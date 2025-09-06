@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/time.h>
+#include <math.h>
 
 /*
  * =============================================================================
@@ -58,6 +59,9 @@ static void print_usage(const char *program_name) {
 static int parse_arguments(int argc, char *argv[], int *my_index, char *host_list, size_t host_list_size) {
     int index_found = 0;
     int list_found = 0;
+    
+    /* Initialize my_index to avoid uninitialized warning */
+    *my_index = -1;
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-myindex") == 0) {
