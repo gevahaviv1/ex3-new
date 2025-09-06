@@ -115,13 +115,25 @@ static int setup_bootstrap_client(const char *target_hostname, int tcp_port) {
     server_address.sin_port = htons(tcp_port);
     memcpy(&server_address.sin_addr, host_entry->h_addr_list[0], host_entry->h_length);
     
-    /* Connect to the server */
-    if (connect(client_socket, (struct sockaddr*)&server_address, 
-                sizeof(server_address)) < 0) {
-        perror("Failed to connect to bootstrap server");
-        close(client_socket);
-        return -1;
+    /* Connect to the server with retry logic */
+    int attempts = 0;
+    while (1) {
+        if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) == 0) {
+            break; // success
+        }
+        if (errno != ECONNREFUSED && errno != ETIMEDOUT && errno != EHOSTUNREACH) {
+            perror("Failed to connect to bootstrap server");
+            close(client_socket);
+            return -1;
+        }
+        if (++attempts >= 50) { // ~5s total
+            perror("Failed to connect to bootstrap server");
+            close(client_socket);
+            return -1;
+        }
+        usleep(100 * 1000); // 100 ms
     }
+    fprintf(stderr, "[TCP] client connect ok: port=%d attempts=%d\n", tcp_port, attempts);
     
     return client_socket;
 }

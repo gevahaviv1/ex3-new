@@ -159,6 +159,19 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   /* Establish TCP connections for bootstrap information exchange */
   int left_tcp_socket = -1, right_tcp_socket = -1;
 
+  int N = process_group->process_group_size;
+  int my = process_group->process_rank;
+
+  int L = left_neighbor_rank;
+  int R = right_neighbor_rank;
+
+  // Symmetric per-pair ports (same number seen by both sides)
+  int left_pair_port  = PG_DEFAULT_PORT + ( (L < my ? L : my) * N + (L > my ? L : my) );
+  int right_pair_port = PG_DEFAULT_PORT + ( (R < my ? R : my) * N + (R > my ? R : my) );
+
+  printf("[Process %d] DEBUG: left-pair port=%d (me=%d, L=%d)\n",  my, left_pair_port,  my, L);
+  printf("[Process %d] DEBUG: right-pair port=%d (me=%d, R=%d)\n", my, right_pair_port, my, R);
+
   /*
    * Fix deadlock: Use rank-based ordering to determine who acts as
    * server/client Lower rank process acts as server, higher rank acts as client
@@ -169,18 +182,16 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   if (left_neighbor_rank != process_group->process_rank) {
     if (process_group->process_rank < left_neighbor_rank) {
       /* I have lower rank, act as server */
-      int left_port = PG_DEFAULT_PORT + 2 * process_group->process_rank;
       left_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, left_port,
+          NULL, left_pair_port,
           1 /* server mode */
       );
     } else {
       /* I have higher rank, act as client */
 
-      int left_port = PG_DEFAULT_PORT + 2 * left_neighbor_rank;
       left_tcp_socket = pgnet_establish_tcp_connection(
           process_group->hostname_list[left_neighbor_rank],
-          left_port, 0 /* client mode */
+          left_pair_port, 0 /* client mode */
       );
     }
 
@@ -195,18 +206,16 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   if (right_neighbor_rank != process_group->process_rank) {
     if (process_group->process_rank < right_neighbor_rank) {
       /* I have lower rank, act as server */
-      int right_port = PG_DEFAULT_PORT + 2 * process_group->process_rank + 1;
       right_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, right_port,
+          NULL, right_pair_port,
           1 /* server mode */
       );
     } else {
       /* I have higher rank, act as client */
 
-      int right_port = PG_DEFAULT_PORT + 2 * right_neighbor_rank + 1;
       right_tcp_socket = pgnet_establish_tcp_connection(
           process_group->hostname_list[right_neighbor_rank],
-          right_port, 0 /* client mode */
+          right_pair_port, 0 /* client mode */
       );
     }
 
@@ -247,13 +256,6 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     close(left_tcp_socket);
   }
 
-  /* Debug: Print bootstrap exchange results */
-  printf("[Process %d] DEBUG: Bootstrap exchange complete:\n", process_group->process_rank);
-  printf("[Process %d] DEBUG: left_local_info.qp=%u, left_remote_info.qp=%u\n",
-         process_group->process_rank, left_local_info.queue_pair_number, left_remote_info.queue_pair_number);
-  printf("[Process %d] DEBUG: right_local_info.qp=%u, right_remote_info.qp=%u\n",
-         process_group->process_rank, right_local_info.queue_pair_number, right_remote_info.queue_pair_number);
-
   if (right_tcp_socket >= 0) {
     /* Determine if we're acting as server or client for right neighbor */
     int right_server_mode =
@@ -279,6 +281,13 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     close(right_tcp_socket);
   }
 
+  /* Debug: Print bootstrap exchange results */
+  printf("[Process %d] DEBUG: Bootstrap exchange complete:\n", process_group->process_rank);
+  printf("[Process %d] DEBUG: left_local_info.qp=%u, left_remote_info.qp=%u\n",
+         process_group->process_rank, left_local_info.queue_pair_number, left_remote_info.queue_pair_number);
+  printf("[Process %d] DEBUG: right_local_info.qp=%u, right_remote_info.qp=%u\n",
+         process_group->process_rank, right_local_info.queue_pair_number, right_remote_info.queue_pair_number);
+
   /* Transition queue pairs to Ready-to-Receive (RTR) state */
   printf("[Process %d] DEBUG: Transitioning queue pairs to RTR state...\n", 
          process_group->process_rank);
@@ -286,6 +295,8 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   if (left_neighbor_rank != process_group->process_rank) {
     printf("[Process %d] DEBUG: Transitioning left QP to RTR with neighbor %d\n", 
            process_group->process_rank, left_neighbor_rank);
+    printf("[Process %d] DEBUG: left RTR uses remote QP=%u LID=%u\n", process_group->process_rank,
+           left_remote_info.queue_pair_number, left_remote_info.local_identifier);
     if (rdma_transition_qp_to_rtr(
             process_group->left_neighbor_qp, &left_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
@@ -300,6 +311,8 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   if (right_neighbor_rank != process_group->process_rank) {
     printf("[Process %d] DEBUG: Transitioning right QP to RTR with neighbor %d\n", 
            process_group->process_rank, right_neighbor_rank);
+    printf("[Process %d] DEBUG: right RTR uses remote QP=%u LID=%u\n", process_group->process_rank,
+           right_remote_info.queue_pair_number, right_remote_info.local_identifier);
     if (rdma_transition_qp_to_rtr(
             process_group->right_neighbor_qp, &right_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
