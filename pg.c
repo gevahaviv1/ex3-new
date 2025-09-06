@@ -156,72 +156,123 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   /* Establish TCP connections for bootstrap information exchange */
   int left_tcp_socket = -1, right_tcp_socket = -1;
 
-  /* Connect to left neighbor (act as server) */
+  /* 
+   * Fix deadlock: Use rank-based ordering to determine who acts as server/client
+   * Lower rank process acts as server, higher rank acts as client
+   * This breaks the circular dependency
+   */
+  
+  /* Handle left neighbor connection */
   if (left_neighbor_rank != process_group->process_rank) {
-    printf("[DEBUG] Process %d: Setting up server socket for left neighbor %d on port %d\n", 
-           process_group->process_rank, left_neighbor_rank, PG_DEFAULT_PORT + process_group->process_rank);
-    fflush(stdout);
-    
-    left_tcp_socket = pgnet_establish_tcp_connection(
-        NULL, PG_DEFAULT_PORT + process_group->process_rank, 1 /* server mode */
-    );
+    if (process_group->process_rank < left_neighbor_rank) {
+      /* I have lower rank, act as server */
+      printf("[DEBUG] Process %d: Acting as server for left neighbor %d on port %d\n", 
+             process_group->process_rank, left_neighbor_rank, PG_DEFAULT_PORT + process_group->process_rank);
+      fflush(stdout);
+      
+      left_tcp_socket = pgnet_establish_tcp_connection(
+          NULL, PG_DEFAULT_PORT + process_group->process_rank, 1 /* server mode */
+      );
+    } else {
+      /* I have higher rank, act as client */
+      printf("[DEBUG] Process %d: Acting as client to left neighbor %d at %s:%d\n", 
+             process_group->process_rank, left_neighbor_rank, 
+             process_group->hostname_list[left_neighbor_rank], PG_DEFAULT_PORT + left_neighbor_rank);
+      fflush(stdout);
+      
+      left_tcp_socket = pgnet_establish_tcp_connection(
+          process_group->hostname_list[left_neighbor_rank],
+          PG_DEFAULT_PORT + left_neighbor_rank, 0 /* client mode */
+      );
+    }
 
     if (left_tcp_socket < 0) {
-      fprintf(stderr,
-              "Failed to establish TCP connection with left neighbor\n");
+      fprintf(stderr, "Failed to establish TCP connection with left neighbor\n");
       return PG_ERROR;
     }
     
-    printf("[DEBUG] Process %d: Server socket established for left neighbor\n", process_group->process_rank);
+    printf("[DEBUG] Process %d: Connection established with left neighbor %d\n", 
+           process_group->process_rank, left_neighbor_rank);
     fflush(stdout);
   }
 
-  /* Connect to right neighbor (act as client) */
+  /* Handle right neighbor connection */
   if (right_neighbor_rank != process_group->process_rank) {
-    printf("[DEBUG] Process %d: Connecting as client to right neighbor %d at %s:%d\n", 
-           process_group->process_rank, right_neighbor_rank, 
-           process_group->hostname_list[right_neighbor_rank], PG_DEFAULT_PORT + right_neighbor_rank);
-    fflush(stdout);
-    
-    right_tcp_socket = pgnet_establish_tcp_connection(
-        process_group->hostname_list[right_neighbor_rank],
-        PG_DEFAULT_PORT + right_neighbor_rank, 0 /* client mode */
-    );
+    if (process_group->process_rank < right_neighbor_rank) {
+      /* I have lower rank, act as server */
+      printf("[DEBUG] Process %d: Acting as server for right neighbor %d on port %d\n", 
+             process_group->process_rank, right_neighbor_rank, PG_DEFAULT_PORT + process_group->process_rank);
+      fflush(stdout);
+      
+      right_tcp_socket = pgnet_establish_tcp_connection(
+          NULL, PG_DEFAULT_PORT + process_group->process_rank, 1 /* server mode */
+      );
+    } else {
+      /* I have higher rank, act as client */
+      printf("[DEBUG] Process %d: Acting as client to right neighbor %d at %s:%d\n", 
+             process_group->process_rank, right_neighbor_rank, 
+             process_group->hostname_list[right_neighbor_rank], PG_DEFAULT_PORT + right_neighbor_rank);
+      fflush(stdout);
+      
+      right_tcp_socket = pgnet_establish_tcp_connection(
+          process_group->hostname_list[right_neighbor_rank],
+          PG_DEFAULT_PORT + right_neighbor_rank, 0 /* client mode */
+      );
+    }
 
     if (right_tcp_socket < 0) {
-      fprintf(stderr,
-              "Failed to establish TCP connection with right neighbor\n");
+      fprintf(stderr, "Failed to establish TCP connection with right neighbor\n");
       if (left_tcp_socket >= 0) close(left_tcp_socket);
       return PG_ERROR;
     }
     
-    printf("[DEBUG] Process %d: Client connection established to right neighbor\n", process_group->process_rank);
+    printf("[DEBUG] Process %d: Connection established with right neighbor %d\n", 
+           process_group->process_rank, right_neighbor_rank);
     fflush(stdout);
   }
 
   /* Exchange bootstrap information over TCP */
   if (left_tcp_socket >= 0) {
+    /* Determine if we're acting as server or client for left neighbor */
+    int left_server_mode = (process_group->process_rank < left_neighbor_rank) ? 1 : 0;
+    
+    printf("[DEBUG] Process %d: Exchanging bootstrap info with left neighbor (server_mode=%d)\n", 
+           process_group->process_rank, left_server_mode);
+    fflush(stdout);
+    
     if (pgnet_exchange_rdma_bootstrap_info(left_tcp_socket, &left_local_info,
                                            &left_remote_info,
-                                           0 /* server mode */) != PG_SUCCESS) {
+                                           left_server_mode) != PG_SUCCESS) {
       fprintf(stderr, "Failed to exchange bootstrap info with left neighbor\n");
       close(left_tcp_socket);
       if (right_tcp_socket >= 0) close(right_tcp_socket);
       return PG_ERROR;
     }
     close(left_tcp_socket);
+    
+    printf("[DEBUG] Process %d: Bootstrap info exchanged with left neighbor\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   if (right_tcp_socket >= 0) {
+    /* Determine if we're acting as server or client for right neighbor */
+    int right_server_mode = (process_group->process_rank < right_neighbor_rank) ? 1 : 0;
+    
+    printf("[DEBUG] Process %d: Exchanging bootstrap info with right neighbor (server_mode=%d)\n", 
+           process_group->process_rank, right_server_mode);
+    fflush(stdout);
+    
     if (pgnet_exchange_rdma_bootstrap_info(right_tcp_socket, &right_local_info,
                                            &right_remote_info,
-                                           1 /* client mode */) != PG_SUCCESS) {
-      fprintf(stderr,
-              "Failed to exchange bootstrap info with right neighbor\n");
+                                           right_server_mode) != PG_SUCCESS) {
+      fprintf(stderr, "Failed to exchange bootstrap info with right neighbor\n");
       close(right_tcp_socket);
       return PG_ERROR;
     }
     close(right_tcp_socket);
+    
+    printf("[DEBUG] Process %d: Bootstrap info exchanged with right neighbor\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   /* Transition queue pairs to Ready-to-Receive (RTR) state */
