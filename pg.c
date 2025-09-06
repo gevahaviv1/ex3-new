@@ -172,59 +172,38 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   printf("[Process %d] DEBUG: left-pair port=%d (me=%d, L=%d)\n",  my, left_pair_port,  my, L);
   printf("[Process %d] DEBUG: right-pair port=%d (me=%d, R=%d)\n", my, right_pair_port, my, R);
 
-  /*
-   * Fix deadlock: Use rank-based ordering to determine who acts as
-   * server/client Lower rank process acts as server, higher rank acts as client
-   * This breaks the circular dependency
-   */
+  int left_server  = (my < L);
+  int right_server = (my < R);
+  int left_needed  = (L != my);
+  int right_needed = (R != my);
 
-  /* Handle left neighbor connection */
-  if (left_neighbor_rank != process_group->process_rank) {
-    if (process_group->process_rank < left_neighbor_rank) {
-      /* I have lower rank, act as server */
-      left_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, left_pair_port,
-          1 /* server mode */
-      );
-    } else {
-      /* I have higher rank, act as client */
+  int left_tcp_socket  = -1;
+  int right_tcp_socket = -1;
 
-      left_tcp_socket = pgnet_establish_tcp_connection(
-          process_group->hostname_list[left_neighbor_rank],
-          left_pair_port, 0 /* client mode */
-      );
-    }
-
-    if (left_tcp_socket < 0) {
-      fprintf(stderr,
-              "Failed to establish TCP connection with left neighbor\n");
-      return PG_ERROR;
-    }
+  /* Phase A — servers first (may block in accept) */
+  if (left_needed && left_server) {
+    printf("[Process %d] DEBUG: LEFT server listen/accept on port %d for neighbor %d\n", my, left_pair_port, L);
+    left_tcp_socket = pgnet_establish_tcp_connection(NULL, left_pair_port, 1); // server mode
+    if (left_tcp_socket < 0) { fprintf(stderr, "Left accept failed\n"); return PG_ERROR; }
+  }
+  if (right_needed && right_server) {
+    printf("[Process %d] DEBUG: RIGHT server listen/accept on port %d for neighbor %d\n", my, right_pair_port, R);
+    right_tcp_socket = pgnet_establish_tcp_connection(NULL, right_pair_port, 1); // server mode
+    if (right_tcp_socket < 0) { fprintf(stderr, "Right accept failed\n"); if (left_tcp_socket>=0) close(left_tcp_socket); return PG_ERROR; }
   }
 
-  /* Handle right neighbor connection */
-  if (right_neighbor_rank != process_group->process_rank) {
-    if (process_group->process_rank < right_neighbor_rank) {
-      /* I have lower rank, act as server */
-      right_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, right_pair_port,
-          1 /* server mode */
-      );
-    } else {
-      /* I have higher rank, act as client */
-
-      right_tcp_socket = pgnet_establish_tcp_connection(
-          process_group->hostname_list[right_neighbor_rank],
-          right_pair_port, 0 /* client mode */
-      );
-    }
-
-    if (right_tcp_socket < 0) {
-      fprintf(stderr,
-              "Failed to establish TCP connection with right neighbor\n");
-      if (left_tcp_socket >= 0) close(left_tcp_socket);
-      return PG_ERROR;
-    }
+  /* Phase B — clients after servers (now retrying) */
+  if (left_needed && !left_server) {
+    printf("[Process %d] DEBUG: LEFT client connect to %s:%d (neighbor %d)\n", my,
+           process_group->hostname_list[L], left_pair_port, L);
+    left_tcp_socket = pgnet_establish_tcp_connection(process_group->hostname_list[L], left_pair_port, 0); // client mode (retries)
+    if (left_tcp_socket < 0) { fprintf(stderr, "Left connect failed after retries\n"); if (right_tcp_socket>=0) close(right_tcp_socket); return PG_ERROR; }
+  }
+  if (right_needed && !right_server) {
+    printf("[Process %d] DEBUG: RIGHT client connect to %s:%d (neighbor %d)\n", my,
+           process_group->hostname_list[R], right_pair_port, R);
+    right_tcp_socket = pgnet_establish_tcp_connection(process_group->hostname_list[R], right_pair_port, 0); // client mode (retries)
+    if (right_tcp_socket < 0) { fprintf(stderr, "Right connect failed after retries\n"); if (left_tcp_socket>=0) close(left_tcp_socket); return PG_ERROR; }
   }
 
   /* Exchange bootstrap information over TCP */

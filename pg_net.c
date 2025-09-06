@@ -76,10 +76,14 @@ static int setup_bootstrap_server(int tcp_port) {
         return -1;
     }
     
+    fprintf(stderr, "[TCP] server listening on %d\n", tcp_port);
+    
     /* Accept one client connection */
     int client_socket = accept(server_socket, NULL, NULL);
     if (client_socket < 0) {
         perror("Failed to accept client connection");
+    } else {
+        fprintf(stderr, "[TCP] server accepted on %d\n", tcp_port);
     }
     
     /* Close the server socket as we only need one connection */
@@ -119,21 +123,21 @@ static int setup_bootstrap_client(const char *target_hostname, int tcp_port) {
     int attempts = 0;
     while (1) {
         if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) == 0) {
-            break; // success
+            fprintf(stderr, "[TCP] client connect ok: port=%d attempts=%d\n", tcp_port, attempts);
+            break;
         }
         if (errno != ECONNREFUSED && errno != ETIMEDOUT && errno != EHOSTUNREACH) {
             perror("Failed to connect to bootstrap server");
             close(client_socket);
             return -1;
         }
-        if (++attempts >= 50) { // ~5s total
+        if (++attempts >= 300) { // ~30s total
             perror("Failed to connect to bootstrap server");
             close(client_socket);
             return -1;
         }
         usleep(100 * 1000); // 100 ms
     }
-    fprintf(stderr, "[TCP] client connect ok: port=%d attempts=%d\n", tcp_port, attempts);
     
     return client_socket;
 }
