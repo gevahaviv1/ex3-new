@@ -276,41 +276,63 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   }
 
   /* Transition queue pairs to Ready-to-Receive (RTR) state */
+  printf("[DEBUG] Process %d: Transitioning queue pairs to RTR state...\n", process_group->process_rank);
+  fflush(stdout);
+  
   if (left_neighbor_rank != process_group->process_rank) {
+    printf("[DEBUG] Process %d: Transitioning left QP to RTR state\n", process_group->process_rank);
+    fflush(stdout);
     if (rdma_transition_qp_to_rtr(
             process_group->left_neighbor_qp, &left_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
       fprintf(stderr, "Failed to transition left QP to RTR state\n");
       return PG_ERROR;
     }
+    printf("[DEBUG] Process %d: Left QP transitioned to RTR state successfully\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   if (right_neighbor_rank != process_group->process_rank) {
+    printf("[DEBUG] Process %d: Transitioning right QP to RTR state\n", process_group->process_rank);
+    fflush(stdout);
     if (rdma_transition_qp_to_rtr(
             process_group->right_neighbor_qp, &right_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
       fprintf(stderr, "Failed to transition right QP to RTR state\n");
       return PG_ERROR;
     }
+    printf("[DEBUG] Process %d: Right QP transitioned to RTR state successfully\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   /* Transition queue pairs to Ready-to-Send (RTS) state */
+  printf("[DEBUG] Process %d: Transitioning queue pairs to RTS state...\n", process_group->process_rank);
+  fflush(stdout);
+  
   if (left_neighbor_rank != process_group->process_rank) {
+    printf("[DEBUG] Process %d: Transitioning left QP to RTS state\n", process_group->process_rank);
+    fflush(stdout);
     if (rdma_transition_qp_to_rts(process_group->left_neighbor_qp,
                                   left_local_info.packet_sequence_number) !=
         PG_SUCCESS) {
       fprintf(stderr, "Failed to transition left QP to RTS state\n");
       return PG_ERROR;
     }
+    printf("[DEBUG] Process %d: Left QP transitioned to RTS state successfully\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   if (right_neighbor_rank != process_group->process_rank) {
+    printf("[DEBUG] Process %d: Transitioning right QP to RTS state\n", process_group->process_rank);
+    fflush(stdout);
     if (rdma_transition_qp_to_rts(process_group->right_neighbor_qp,
                                   right_local_info.packet_sequence_number) !=
         PG_SUCCESS) {
       fprintf(stderr, "Failed to transition right QP to RTS state\n");
       return PG_ERROR;
     }
+    printf("[DEBUG] Process %d: Right QP transitioned to RTS state successfully\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   return PG_SUCCESS;
@@ -489,7 +511,13 @@ int pg_cleanup(pg_handle_t process_group_handle) {
 static int perform_ring_communication_step(pg_handle_internal_t *process_group,
                                            void *send_data, void *receive_data,
                                            size_t data_size) {
+  printf("[DEBUG] Process %d: Starting ring communication step (send_size=%zu)\n", 
+         process_group->process_rank, data_size);
+  fflush(stdout);
+
   /* Post receive request for incoming data from left neighbor */
+  printf("[DEBUG] Process %d: Posting receive request from left neighbor\n", process_group->process_rank);
+  fflush(stdout);
   if (rdma_post_receive_request(process_group->left_neighbor_qp, receive_data,
                                 data_size,
                                 process_group->left_receive_mr) != PG_SUCCESS) {
@@ -498,9 +526,11 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
   }
 
   /* Post send request to right neighbor */
+  printf("[DEBUG] Process %d: Posting send request to right neighbor\n", process_group->process_rank);
+  fflush(stdout);
   if (rdma_post_send_request(process_group->right_neighbor_qp, send_data,
                              data_size,
-                             process_group->right_send_mr) != PG_SUCCESS) {
+                             process_group->left_send_mr) != PG_SUCCESS) {
     fprintf(stderr, "Failed to post send request\n");
     return PG_ERROR;
   }
