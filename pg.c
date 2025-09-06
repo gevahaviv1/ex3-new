@@ -809,10 +809,22 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   printf("[Process %d] Simple point-to-point RDMA test with process %d\n", 
          process_group->process_rank, 1 - process_group->process_rank);
   
-  /* Use right neighbor QP for both processes to test basic connectivity */
-  struct ibv_qp *test_qp = process_group->right_neighbor_qp;
-  struct ibv_mr *send_mr = process_group->right_send_mr;
-  struct ibv_mr *recv_mr = process_group->left_receive_mr;
+  /* Use the correct connected queue pairs:
+   * Process 0: right_neighbor_qp connects to Process 1's left_neighbor_qp
+   * Process 1: left_neighbor_qp connects to Process 0's right_neighbor_qp */
+  struct ibv_qp *test_qp;
+  struct ibv_mr *send_mr;
+  struct ibv_mr *recv_mr;
+  
+  if (process_group->process_rank == 0) {
+    test_qp = process_group->right_neighbor_qp;  /* Connected to Process 1's left_neighbor_qp */
+    send_mr = process_group->right_send_mr;
+    recv_mr = process_group->left_receive_mr;
+  } else { /* Process 1 */
+    test_qp = process_group->left_neighbor_qp;   /* Connected to Process 0's right_neighbor_qp */
+    send_mr = process_group->right_send_mr;
+    recv_mr = process_group->left_receive_mr;
+  }
   
   /* Prepare test data */
   size_t test_data_size = 64;
