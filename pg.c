@@ -1,20 +1,21 @@
 #define _GNU_SOURCE
 
 #include "pg.h"
-#include "pg_internal.h"
-#include "pg_net.h"
-#include "RDMA_api.h"
-#include "constants.h"
 
+#include <arpa/inet.h>
+#include <math.h>
+#include <netinet/in.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include <unistd.h>
-#include <stdbool.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <unistd.h>
+
+#include "RDMA_api.h"
+#include "constants.h"
+#include "pg_internal.h"
+#include "pg_net.h"
 
 /*
  * =============================================================================
@@ -138,23 +139,29 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   /* Use centralized bootstrap via rank 0 (based on ring_rendezvous.c) */
   int rank = process_group->process_rank;
   int world_size = process_group->process_group_size;
-  
-  printf("[Process %d] DEBUG: Starting centralized bootstrap (rank 0 server approach)\n", rank);
+
+  printf(
+      "[Process %d] DEBUG: Starting centralized bootstrap (rank 0 server "
+      "approach)\n",
+      rank);
 
   /* Extract local QP info */
   rdma_qp_bootstrap_info_t left_local_info, right_local_info;
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->left_neighbor_qp, &left_local_info);
+                                 process_group->left_neighbor_qp,
+                                 &left_local_info);
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->right_neighbor_qp, &right_local_info);
+                                 process_group->right_neighbor_qp,
+                                 &right_local_info);
 
   rdma_qp_bootstrap_info_t left_remote_info, right_remote_info;
 
   if (rank == 0) {
     /* Rank 0: Act as centralized server */
     printf("[Process 0] DEBUG: Acting as bootstrap server\n");
-    
-    int server_socket = pgnet_establish_tcp_connection(NULL, PG_DEFAULT_PORT, 1);
+
+    int server_socket =
+        pgnet_establish_tcp_connection(NULL, PG_DEFAULT_PORT, 1);
     if (server_socket < 0) {
       fprintf(stderr, "Failed to create bootstrap server socket\n");
       return PG_ERROR;
@@ -165,7 +172,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       uint32_t qp_left, qp_right;
       uint16_t lid;
     } rank_info_t;
-    
+
     rank_info_t *rank_infos = calloc(world_size, sizeof(rank_info_t));
     if (!rank_infos) {
       close(server_socket);
@@ -179,13 +186,19 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     printf("[Process 0] DEBUG: Self info - left_qp=%u, right_qp=%u, lid=%u\n",
            rank_infos[0].qp_left, rank_infos[0].qp_right, rank_infos[0].lid);
 
-    /* Accept connections from other ranks */
+    printf("[Process 0] DEBUG: Phase 1 - Collecting QP info from all ranks\n");
+    
+    int *client_sockets = calloc(world_size, sizeof(int));
+    for (int i = 0; i < world_size; i++) client_sockets[i] = -1;
+    
     for (int i = 1; i < world_size; i++) {
       struct sockaddr_in client_addr;
       socklen_t addr_len = sizeof(client_addr);
+      
       int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
       if (client_socket < 0) {
         fprintf(stderr, "Failed to accept client connection\n");
+        free(client_sockets);
         free(rank_infos);
         close(server_socket);
         return PG_ERROR;
@@ -212,13 +225,19 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       rank_infos[client_rank].qp_left = client_left.queue_pair_number;
       rank_infos[client_rank].qp_right = client_right.queue_pair_number;
       rank_infos[client_rank].lid = client_left.local_identifier;
+      client_sockets[client_rank] = client_socket;
 
-      printf("[Process 0] DEBUG: Received from rank %d: left_qp=%u, right_qp=%u, lid=%u\n",
+      printf("[Process 0] DEBUG: Collected from rank %d: left_qp=%u, right_qp=%u, lid=%u\n",
              client_rank, client_left.queue_pair_number, client_right.queue_pair_number, client_left.local_identifier);
+    }
 
-      /* Send back neighbor info immediately */
-      int left_neighbor = (client_rank - 1 + world_size) % world_size;
-      int right_neighbor = (client_rank + 1) % world_size;
+    printf("[Process 0] DEBUG: Phase 2 - Sending neighbor info to all ranks\n");
+    
+    for (int rank = 1; rank < world_size; rank++) {
+      if (client_sockets[rank] < 0) continue;
+      
+      int left_neighbor = (rank - 1 + world_size) % world_size;
+      int right_neighbor = (rank + 1) % world_size;
 
       rdma_qp_bootstrap_info_t left_remote, right_remote;
       left_remote.queue_pair_number = rank_infos[left_neighbor].qp_right;
@@ -226,28 +245,33 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       right_remote.queue_pair_number = rank_infos[right_neighbor].qp_left;
       right_remote.local_identifier = rank_infos[right_neighbor].lid;
 
-      if (send(client_socket, &left_remote, sizeof(left_remote), 0) != sizeof(left_remote) ||
-          send(client_socket, &right_remote, sizeof(right_remote), 0) != sizeof(right_remote)) {
-        fprintf(stderr, "Failed to send neighbor info to rank %d\n", client_rank);
+      if (send(client_sockets[rank], &left_remote, sizeof(left_remote), 0) != sizeof(left_remote) ||
+          send(client_sockets[rank], &right_remote, sizeof(right_remote), 0) != sizeof(right_remote)) {
+        fprintf(stderr, "Failed to send neighbor info to rank %d\n", rank);
       } else {
         printf("[Process 0] DEBUG: Sent to rank %d: left_remote_qp=%u, right_remote_qp=%u\n",
-               client_rank, left_remote.queue_pair_number, right_remote.queue_pair_number);
+               rank, left_remote.queue_pair_number, right_remote.queue_pair_number);
       }
 
-      close(client_socket);
+      close(client_sockets[rank]);
     }
+    
+    free(client_sockets);
 
     /* Set up rank 0's own neighbor info */
-    int left_neighbor = (world_size - 1) % world_size;
-    int right_neighbor = 1 % world_size;
+    int left_neighbor = world_size - 1;
+    int right_neighbor = 1;
 
     left_remote_info.queue_pair_number = rank_infos[left_neighbor].qp_right;
     left_remote_info.local_identifier = rank_infos[left_neighbor].lid;
     right_remote_info.queue_pair_number = rank_infos[right_neighbor].qp_left;
     right_remote_info.local_identifier = rank_infos[right_neighbor].lid;
 
-    printf("[Process 0] DEBUG: Own neighbors: left_remote_qp=%u, right_remote_qp=%u\n",
-           left_remote_info.queue_pair_number, right_remote_info.queue_pair_number);
+    printf(
+        "[Process 0] DEBUG: Own neighbors: left_remote_qp=%u, "
+        "right_remote_qp=%u\n",
+        left_remote_info.queue_pair_number,
+        right_remote_info.queue_pair_number);
 
     free(rank_infos);
     close(server_socket);
@@ -256,7 +280,8 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     /* Other ranks: Connect to rank 0 */
     printf("[Process %d] DEBUG: Connecting to rank 0 for bootstrap\n", rank);
 
-    int client_socket = pgnet_establish_tcp_connection(process_group->hostname_list[0], PG_DEFAULT_PORT, 0);
+    int client_socket = pgnet_establish_tcp_connection(
+        process_group->hostname_list[0], PG_DEFAULT_PORT, 0);
     if (client_socket < 0) {
       fprintf(stderr, "Failed to connect to rank 0\n");
       return PG_ERROR;
@@ -264,61 +289,85 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
     /* Send our rank and QP info to rank 0 */
     if (send(client_socket, &rank, sizeof(rank), 0) != sizeof(rank) ||
-        send(client_socket, &left_local_info, sizeof(left_local_info), 0) != sizeof(left_local_info) ||
-        send(client_socket, &right_local_info, sizeof(right_local_info), 0) != sizeof(right_local_info)) {
+        send(client_socket, &left_local_info, sizeof(left_local_info), 0) !=
+            sizeof(left_local_info) ||
+        send(client_socket, &right_local_info, sizeof(right_local_info), 0) !=
+            sizeof(right_local_info)) {
       fprintf(stderr, "Failed to send info to rank 0\n");
       close(client_socket);
       return PG_ERROR;
     }
 
-    printf("[Process %d] DEBUG: Sent QP info to rank 0: left_qp=%u, right_qp=%u\n",
-           rank, left_local_info.queue_pair_number, right_local_info.queue_pair_number);
+    printf(
+        "[Process %d] DEBUG: Sent QP info to rank 0: left_qp=%u, right_qp=%u\n",
+        rank, left_local_info.queue_pair_number,
+        right_local_info.queue_pair_number);
 
     /* Receive neighbor info from rank 0 */
-    if (recv(client_socket, &left_remote_info, sizeof(left_remote_info), 0) != sizeof(left_remote_info) ||
-        recv(client_socket, &right_remote_info, sizeof(right_remote_info), 0) != sizeof(right_remote_info)) {
+    if (recv(client_socket, &left_remote_info, sizeof(left_remote_info), 0) !=
+            sizeof(left_remote_info) ||
+        recv(client_socket, &right_remote_info, sizeof(right_remote_info), 0) !=
+            sizeof(right_remote_info)) {
       fprintf(stderr, "Failed to receive neighbor info from rank 0\n");
       close(client_socket);
       return PG_ERROR;
     }
 
-    printf("[Process %d] DEBUG: Received neighbor info: left_remote_qp=%u, right_remote_qp=%u\n",
-           rank, left_remote_info.queue_pair_number, right_remote_info.queue_pair_number);
+    printf(
+        "[Process %d] DEBUG: Received neighbor info: left_remote_qp=%u, "
+        "right_remote_qp=%u\n",
+        rank, left_remote_info.queue_pair_number,
+        right_remote_info.queue_pair_number);
 
     close(client_socket);
   }
 
   /* Transition queue pairs to RTR state */
-  printf("[Process %d] DEBUG: Transitioning queue pairs to RTR state...\n", rank);
+  printf("[Process %d] DEBUG: Transitioning queue pairs to RTR state...\n",
+         rank);
 
-  if (rdma_transition_qp_to_rtr(process_group->left_neighbor_qp, &left_remote_info,
-                                process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to transition left QP to RTR state\n", rank);
+  if (rdma_transition_qp_to_rtr(
+          process_group->left_neighbor_qp, &left_remote_info,
+          process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
+    fprintf(stderr,
+            "[Process %d] ERROR: Failed to transition left QP to RTR state\n",
+            rank);
     return PG_ERROR;
   }
 
-  if (rdma_transition_qp_to_rtr(process_group->right_neighbor_qp, &right_remote_info,
-                                process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to transition right QP to RTR state\n", rank);
+  if (rdma_transition_qp_to_rtr(
+          process_group->right_neighbor_qp, &right_remote_info,
+          process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
+    fprintf(stderr,
+            "[Process %d] ERROR: Failed to transition right QP to RTR state\n",
+            rank);
     return PG_ERROR;
   }
 
   /* Transition queue pairs to RTS state */
-  printf("[Process %d] DEBUG: Transitioning queue pairs to RTS state...\n", rank);
+  printf("[Process %d] DEBUG: Transitioning queue pairs to RTS state...\n",
+         rank);
 
   if (rdma_transition_qp_to_rts(process_group->left_neighbor_qp,
-                                left_local_info.packet_sequence_number) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to transition left QP to RTS state\n", rank);
+                                left_local_info.packet_sequence_number) !=
+      PG_SUCCESS) {
+    fprintf(stderr,
+            "[Process %d] ERROR: Failed to transition left QP to RTS state\n",
+            rank);
     return PG_ERROR;
   }
 
   if (rdma_transition_qp_to_rts(process_group->right_neighbor_qp,
-                                right_local_info.packet_sequence_number) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to transition right QP to RTS state\n", rank);
+                                right_local_info.packet_sequence_number) !=
+      PG_SUCCESS) {
+    fprintf(stderr,
+            "[Process %d] ERROR: Failed to transition right QP to RTS state\n",
+            rank);
     return PG_ERROR;
   }
 
-  printf("[Process %d] DEBUG: Bootstrap complete - all queue pairs connected\n", rank);
+  printf("[Process %d] DEBUG: Bootstrap complete - all queue pairs connected\n",
+         rank);
   return PG_SUCCESS;
 }
 
@@ -456,85 +505,91 @@ int pg_cleanup(pg_handle_t process_group_handle) {
 static int perform_ring_communication_step(pg_handle_internal_t *process_group,
                                            void *send_data, void *receive_data,
                                            size_t data_size) {
-  int left_neighbor = (process_group->process_rank - 1 + process_group->process_group_size) % process_group->process_group_size;
-  int right_neighbor = (process_group->process_rank + 1) % process_group->process_group_size;
-  
-  printf("[Process %d] DEBUG: Starting ring communication step (data_size=%zu)\n", 
-         process_group->process_rank, data_size);
-  printf("[Process %d] DEBUG: Will receive from process %d, send to process %d\n", 
-         process_group->process_rank, left_neighbor, right_neighbor);
-  
+  int left_neighbor =
+      (process_group->process_rank - 1 + process_group->process_group_size) %
+      process_group->process_group_size;
+  int right_neighbor =
+      (process_group->process_rank + 1) % process_group->process_group_size;
+
+  printf(
+      "[Process %d] DEBUG: Starting ring communication step (data_size=%zu)\n",
+      process_group->process_rank, data_size);
+  printf(
+      "[Process %d] DEBUG: Will receive from process %d, send to process %d\n",
+      process_group->process_rank, left_neighbor, right_neighbor);
+
   /* Post receive request for incoming data from left neighbor */
-  printf("[Process %d] DEBUG: Posting receive request from process %d...\n", 
+  printf("[Process %d] DEBUG: Posting receive request from process %d...\n",
          process_group->process_rank, left_neighbor);
-  
+
   if (rdma_post_receive_request(process_group->left_neighbor_qp, receive_data,
                                 data_size,
                                 process_group->left_receive_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to post receive request\n", 
+    fprintf(stderr, "[Process %d] ERROR: Failed to post receive request\n",
             process_group->process_rank);
     return PG_ERROR;
   }
-  
-  printf("[Process %d] DEBUG: Receive request posted successfully\n", 
+
+  printf("[Process %d] DEBUG: Receive request posted successfully\n",
          process_group->process_rank);
 
   /* Synchronization barrier: ensure all processes have posted receives */
-  printf("[Process %d] DEBUG: Entering synchronization barrier (1 second)...\n", 
+  printf("[Process %d] DEBUG: Entering synchronization barrier (1 second)...\n",
          process_group->process_rank);
 
   /* All processes wait the same amount to ensure synchronization */
   usleep(1000000); /* 1 second delay for all processes */
-  
-  printf("[Process %d] DEBUG: Synchronization barrier complete\n", 
+
+  printf("[Process %d] DEBUG: Synchronization barrier complete\n",
          process_group->process_rank);
 
   /* Post send request to right neighbor */
-  printf("[Process %d] DEBUG: Posting send request to process %d...\n", 
+  printf("[Process %d] DEBUG: Posting send request to process %d...\n",
          process_group->process_rank, right_neighbor);
-  
+
   if (rdma_post_send_request(process_group->right_neighbor_qp, send_data,
                              data_size,
                              process_group->right_send_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to post send request\n", 
+    fprintf(stderr, "[Process %d] ERROR: Failed to post send request\n",
             process_group->process_rank);
     return PG_ERROR;
   }
-  
-  printf("[Process %d] DEBUG: Send request posted successfully\n", 
+
+  printf("[Process %d] DEBUG: Send request posted successfully\n",
          process_group->process_rank);
 
   /* Wait for both operations to complete */
   struct ibv_wc work_completion;
 
   /* Wait for receive completion */
-  printf("[Process %d] DEBUG: Waiting for receive completion...\n", 
+  printf("[Process %d] DEBUG: Waiting for receive completion...\n",
          process_group->process_rank);
-  
+
   if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
                                &work_completion) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to complete receive operation\n", 
+    fprintf(stderr,
+            "[Process %d] ERROR: Failed to complete receive operation\n",
             process_group->process_rank);
     return PG_ERROR;
   }
-  
-  printf("[Process %d] DEBUG: Receive completed successfully\n", 
+
+  printf("[Process %d] DEBUG: Receive completed successfully\n",
          process_group->process_rank);
 
   /* Wait for send completion */
-  printf("[Process %d] DEBUG: Waiting for send completion...\n", 
+  printf("[Process %d] DEBUG: Waiting for send completion...\n",
          process_group->process_rank);
-  
+
   if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
                                &work_completion) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to complete send operation\n", 
+    fprintf(stderr, "[Process %d] ERROR: Failed to complete send operation\n",
             process_group->process_rank);
     return PG_ERROR;
   }
-  
-  printf("[Process %d] DEBUG: Send completed successfully\n", 
+
+  printf("[Process %d] DEBUG: Send completed successfully\n",
          process_group->process_rank);
-  printf("[Process %d] DEBUG: Ring communication step completed successfully\n", 
+  printf("[Process %d] DEBUG: Ring communication step completed successfully\n",
          process_group->process_rank);
 
   return PG_SUCCESS;
@@ -560,10 +615,15 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   int process_rank = process_group->process_rank;
 
   /* Global synchronization barrier before starting collective operation */
-  printf("[Process %d] DEBUG: Starting reduce-scatter operation\n", process_rank);
-  printf("[Process %d] DEBUG: Entering global synchronization barrier (2 seconds)...\n", process_rank);
+  printf("[Process %d] DEBUG: Starting reduce-scatter operation\n",
+         process_rank);
+  printf(
+      "[Process %d] DEBUG: Entering global synchronization barrier (2 "
+      "seconds)...\n",
+      process_rank);
   usleep(2000000); /* 2 second initial barrier for all processes */
-  printf("[Process %d] DEBUG: Global synchronization barrier complete\n", process_rank);
+  printf("[Process %d] DEBUG: Global synchronization barrier complete\n",
+         process_rank);
 
   /* Handle single-process case */
   if (group_size == 1) {
@@ -637,9 +697,13 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
 
   /* Global synchronization barrier before starting collective operation */
   printf("[Process %d] DEBUG: Starting all-gather operation\n", process_rank);
-  printf("[Process %d] DEBUG: Entering global synchronization barrier (2 seconds)...\n", process_rank);
+  printf(
+      "[Process %d] DEBUG: Entering global synchronization barrier (2 "
+      "seconds)...\n",
+      process_rank);
   usleep(2000000); /* 2 second initial barrier for all processes */
-  printf("[Process %d] DEBUG: Global synchronization barrier complete\n", process_rank);
+  printf("[Process %d] DEBUG: Global synchronization barrier complete\n",
+         process_rank);
 
   /* Handle single-process case */
   if (group_size == 1) {
@@ -771,120 +835,146 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
  * Sends small test messages to verify RDMA operations work
  */
 int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
-  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
-  
+  pg_handle_internal_t *process_group =
+      (pg_handle_internal_t *)process_group_handle;
+
   if (!process_group) {
     fprintf(stderr, "Invalid process group handle\n");
     return PG_ERROR;
   }
-  
-  printf("[Process %d] Testing RDMA connectivity...\n", process_group->process_rank);
-  
+
+  printf("[Process %d] Testing RDMA connectivity...\n",
+         process_group->process_rank);
+
   /* Skip connectivity test for single-process groups */
   if (process_group->process_group_size == 1) {
-    printf("[Process %d] Single process group - connectivity test skipped\n", 
+    printf("[Process %d] Single process group - connectivity test skipped\n",
            process_group->process_rank);
     return PG_SUCCESS;
   }
-  
+
   /* Test only between process 0 and process 1 for simplicity */
   if (process_group->process_rank != 0 && process_group->process_rank != 1) {
-    printf("[Process %d] Skipping connectivity test (only testing process 0 <-> 1)\n", 
-           process_group->process_rank);
+    printf(
+        "[Process %d] Skipping connectivity test (only testing process 0 <-> "
+        "1)\n",
+        process_group->process_rank);
     return PG_SUCCESS;
   }
-  
-  printf("[Process %d] Simple point-to-point RDMA test with process %d\n", 
+
+  printf("[Process %d] Simple point-to-point RDMA test with process %d\n",
          process_group->process_rank, 1 - process_group->process_rank);
-  
+
   /* Use the correct connected queue pairs:
    * Process 0: right_neighbor_qp connects to Process 1's left_neighbor_qp
    * Process 1: left_neighbor_qp connects to Process 0's right_neighbor_qp */
   struct ibv_qp *test_qp;
   struct ibv_mr *send_mr;
   struct ibv_mr *recv_mr;
-  
+
   if (process_group->process_rank == 0) {
-    test_qp = process_group->right_neighbor_qp;  /* Connected to Process 1's left_neighbor_qp */
+    test_qp =
+        process_group
+            ->right_neighbor_qp; /* Connected to Process 1's left_neighbor_qp */
     send_mr = process_group->right_send_mr;
     recv_mr = process_group->left_receive_mr;
   } else { /* Process 1 */
-    test_qp = process_group->left_neighbor_qp;   /* Connected to Process 0's right_neighbor_qp */
+    test_qp =
+        process_group
+            ->left_neighbor_qp; /* Connected to Process 0's right_neighbor_qp */
     send_mr = process_group->right_send_mr;
     recv_mr = process_group->left_receive_mr;
   }
-  
+
   /* Prepare test data */
   size_t test_data_size = 64;
   char *test_send_data = (char *)process_group->right_send_buffer;
   char *test_receive_data = (char *)process_group->left_receive_buffer;
-  
+
   /* Initialize send data with process rank pattern */
   for (size_t i = 0; i < test_data_size; i++) {
     test_send_data[i] = (char)(process_group->process_rank * 10 + i);
   }
   memset(test_receive_data, 0, test_data_size);
-  
-  printf("[Process %d] Using QP %u for test\n", 
-         process_group->process_rank, test_qp->qp_num);
-  
+
+  printf("[Process %d] Using QP %u for test\n", process_group->process_rank,
+         test_qp->qp_num);
+
   /* Both processes post receive first */
-  printf("[Process %d] Posting receive request...\n", process_group->process_rank);
-  if (rdma_post_receive_request(test_qp, test_receive_data, test_data_size, recv_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Failed to post receive request\n", process_group->process_rank);
+  printf("[Process %d] Posting receive request...\n",
+         process_group->process_rank);
+  if (rdma_post_receive_request(test_qp, test_receive_data, test_data_size,
+                                recv_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post receive request\n",
+            process_group->process_rank);
     return PG_ERROR;
   }
-  
+
   /* Synchronization barrier */
-  printf("[Process %d] Synchronization barrier (1 second)...\n", process_group->process_rank);
+  printf("[Process %d] Synchronization barrier (1 second)...\n",
+         process_group->process_rank);
   usleep(1000000);
-  
+
   /* Both processes send to each other */
   printf("[Process %d] Posting send request...\n", process_group->process_rank);
-  if (rdma_post_send_request(test_qp, test_send_data, test_data_size, send_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Failed to post send request\n", process_group->process_rank);
+  if (rdma_post_send_request(test_qp, test_send_data, test_data_size,
+                             send_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post send request\n",
+            process_group->process_rank);
     return PG_ERROR;
   }
-  
+
   /* Wait for completions */
-  printf("[Process %d] Waiting for receive completion...\n", process_group->process_rank);
+  printf("[Process %d] Waiting for receive completion...\n",
+         process_group->process_rank);
   struct ibv_wc work_completion;
-  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Point-to-point test FAILED - receive completion failed\n", 
-            process_group->process_rank);
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
+                               &work_completion) != PG_SUCCESS) {
+    fprintf(
+        stderr,
+        "[Process %d] Point-to-point test FAILED - receive completion failed\n",
+        process_group->process_rank);
     return PG_ERROR;
   }
-  
-  printf("[Process %d] Waiting for send completion...\n", process_group->process_rank);
-  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Point-to-point test FAILED - send completion failed\n", 
-            process_group->process_rank);
+
+  printf("[Process %d] Waiting for send completion...\n",
+         process_group->process_rank);
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
+                               &work_completion) != PG_SUCCESS) {
+    fprintf(
+        stderr,
+        "[Process %d] Point-to-point test FAILED - send completion failed\n",
+        process_group->process_rank);
     return PG_ERROR;
   }
-  
+
   /* Verify received data */
   int expected_sender = 1 - process_group->process_rank;
-  printf("[Process %d] Verifying data from process %d...\n", 
+  printf("[Process %d] Verifying data from process %d...\n",
          process_group->process_rank, expected_sender);
-  
+
   int data_valid = 1;
   for (size_t i = 0; i < test_data_size; i++) {
     char expected_value = (char)(expected_sender * 10 + i);
     if (test_receive_data[i] != expected_value) {
-      printf("[Process %d] Data mismatch at byte %zu: expected %d, got %d\n", 
-             process_group->process_rank, i, expected_value, test_receive_data[i]);
+      printf("[Process %d] Data mismatch at byte %zu: expected %d, got %d\n",
+             process_group->process_rank, i, expected_value,
+             test_receive_data[i]);
       data_valid = 0;
       break;
     }
   }
-  
+
   if (data_valid) {
-    printf("[Process %d] Point-to-point RDMA test PASSED\n", process_group->process_rank);
-  } else {
-    printf("[Process %d] Point-to-point RDMA test FAILED - data verification failed\n", 
+    printf("[Process %d] Point-to-point RDMA test PASSED\n",
            process_group->process_rank);
+  } else {
+    printf(
+        "[Process %d] Point-to-point RDMA test FAILED - data verification "
+        "failed\n",
+        process_group->process_rank);
     return PG_ERROR;
   }
-  
+
   return PG_SUCCESS;
 }
