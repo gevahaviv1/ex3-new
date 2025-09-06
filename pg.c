@@ -431,7 +431,7 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
   /* Synchronization barrier: ensure all processes have posted receives */
 
   /* All processes wait the same amount to ensure synchronization */
-  usleep(200000); /* 200ms delay for all processes */
+  usleep(1000000); /* 1 second delay for all processes */
 
   /* Post send request to right neighbor */
   if (rdma_post_send_request(process_group->right_neighbor_qp, send_data,
@@ -481,7 +481,7 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   int process_rank = process_group->process_rank;
 
   /* Global synchronization barrier before starting collective operation */
-  usleep(500000); /* 500ms initial barrier for all processes */
+  usleep(2000000); /* 2 second initial barrier for all processes */
 
   /* Handle single-process case */
   if (group_size == 1) {
@@ -552,6 +552,9 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
 
   int group_size = process_group->process_group_size;
   int process_rank = process_group->process_rank;
+
+  /* Global synchronization barrier before starting collective operation */
+  usleep(2000000); /* 2 second initial barrier for all processes */
 
   /* Handle single-process case */
   if (group_size == 1) {
