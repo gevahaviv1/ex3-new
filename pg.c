@@ -192,30 +192,35 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     for (int i = 0; i < world_size; i++) client_sockets[i] = -1;
     
     int connected_ranks = 1; // Count rank 0
+    
+    /* Set socket timeout to detect missing ranks */
+    struct timeval timeout;
+    timeout.tv_sec = 5;  // 5 second timeout
+    timeout.tv_usec = 0;
+    setsockopt(server_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    
     for (int i = 1; i < world_size; i++) {
       struct sockaddr_in client_addr;
       socklen_t addr_len = sizeof(client_addr);
       
-      /* Set socket timeout to detect missing ranks */
-      struct timeval timeout;
-      timeout.tv_sec = 5;  // 5 second timeout
-      timeout.tv_usec = 0;
-      setsockopt(server_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-      
       int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
       if (client_socket < 0) {
-        printf("[Process 0] DEBUG: Timeout waiting for rank %d - proceeding with %d ranks\n", i, connected_ranks);
+        printf("[Process 0] DEBUG: Timeout waiting for more ranks - proceeding with %d ranks\n", connected_ranks);
         break; // Stop waiting for more ranks
       }
+
+      printf("[Process 0] DEBUG: Accepted connection from client, receiving data...\n");
 
       /* Receive rank ID and QP info */
       int client_rank;
       rdma_qp_bootstrap_info_t client_left, client_right;
       
-      if (recv(client_socket, &client_rank, sizeof(client_rank), 0) != sizeof(client_rank) ||
-          recv(client_socket, &client_left, sizeof(client_left), 0) != sizeof(client_left) ||
-          recv(client_socket, &client_right, sizeof(client_right), 0) != sizeof(client_right)) {
-        fprintf(stderr, "Failed to receive client info\n");
+      ssize_t recv1 = recv(client_socket, &client_rank, sizeof(client_rank), 0);
+      ssize_t recv2 = recv(client_socket, &client_left, sizeof(client_left), 0);
+      ssize_t recv3 = recv(client_socket, &client_right, sizeof(client_right), 0);
+      
+      if (recv1 != sizeof(client_rank) || recv2 != sizeof(client_left) || recv3 != sizeof(client_right)) {
+        fprintf(stderr, "Failed to receive client info: recv1=%zd, recv2=%zd, recv3=%zd\n", recv1, recv2, recv3);
         close(client_socket);
         continue;
       }
