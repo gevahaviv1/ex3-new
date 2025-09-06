@@ -221,10 +221,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
     printf("[Process %d] DEBUG: Exchanging with left neighbor %d (server_mode=%d)\n", 
            process_group->process_rank, left_neighbor_rank, left_server_mode);
-    printf("[Process %d] DEBUG: Sending right QP num to left neighbor: %u\n", 
-           process_group->process_rank, right_local_info.queue_pair_number);
+    printf("[Process %d] DEBUG: Sending left QP num to left neighbor: %u\n", 
+           process_group->process_rank, left_local_info.queue_pair_number);
 
-    if (pgnet_exchange_rdma_bootstrap_info(left_tcp_socket, &right_local_info,
+    if (pgnet_exchange_rdma_bootstrap_info(left_tcp_socket, &left_local_info,
                                            &left_remote_info,
                                            left_server_mode) != PG_SUCCESS) {
       fprintf(stderr, "Failed to exchange bootstrap info with left neighbor\n");
@@ -246,10 +246,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
     printf("[Process %d] DEBUG: Exchanging with right neighbor %d (server_mode=%d)\n", 
            process_group->process_rank, right_neighbor_rank, right_server_mode);
-    printf("[Process %d] DEBUG: Sending left QP num to right neighbor: %u\n", 
-           process_group->process_rank, left_local_info.queue_pair_number);
+    printf("[Process %d] DEBUG: Sending right QP num to right neighbor: %u\n", 
+           process_group->process_rank, right_local_info.queue_pair_number);
 
-    if (pgnet_exchange_rdma_bootstrap_info(right_tcp_socket, &left_local_info,
+    if (pgnet_exchange_rdma_bootstrap_info(right_tcp_socket, &right_local_info,
                                            &right_remote_info,
                                            right_server_mode) != PG_SUCCESS) {
       fprintf(stderr,
