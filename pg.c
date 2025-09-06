@@ -143,12 +143,18 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   rdma_qp_bootstrap_info_t right_local_info, right_remote_info;
 
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->right_neighbor_qp,
+                                 process_group->left_neighbor_qp,
                                  &left_local_info);
 
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->left_neighbor_qp,
+                                 process_group->right_neighbor_qp,
                                  &right_local_info);
+
+  /* Debug: Print QP numbers after creation */
+  printf("[Process %d] DEBUG: Created QPs - left_neighbor_qp: %u, right_neighbor_qp: %u\n",
+         process_group->process_rank, 
+         process_group->left_neighbor_qp->qp_num,
+         process_group->right_neighbor_qp->qp_num);
 
   /* Establish TCP connections for bootstrap information exchange */
   int left_tcp_socket = -1, right_tcp_socket = -1;
@@ -163,17 +169,18 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   if (left_neighbor_rank != process_group->process_rank) {
     if (process_group->process_rank < left_neighbor_rank) {
       /* I have lower rank, act as server */
-
+      int left_port = PG_DEFAULT_PORT + 2 * process_group->process_rank;
       left_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, PG_DEFAULT_PORT + process_group->process_rank,
+          NULL, left_port,
           1 /* server mode */
       );
     } else {
       /* I have higher rank, act as client */
 
+      int left_port = PG_DEFAULT_PORT + 2 * left_neighbor_rank;
       left_tcp_socket = pgnet_establish_tcp_connection(
           process_group->hostname_list[left_neighbor_rank],
-          PG_DEFAULT_PORT + left_neighbor_rank, 0 /* client mode */
+          left_port, 0 /* client mode */
       );
     }
 
@@ -188,17 +195,18 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   if (right_neighbor_rank != process_group->process_rank) {
     if (process_group->process_rank < right_neighbor_rank) {
       /* I have lower rank, act as server */
-
+      int right_port = PG_DEFAULT_PORT + 2 * process_group->process_rank + 1;
       right_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, PG_DEFAULT_PORT + process_group->process_rank,
+          NULL, right_port,
           1 /* server mode */
       );
     } else {
       /* I have higher rank, act as client */
 
+      int right_port = PG_DEFAULT_PORT + 2 * right_neighbor_rank + 1;
       right_tcp_socket = pgnet_establish_tcp_connection(
           process_group->hostname_list[right_neighbor_rank],
-          PG_DEFAULT_PORT + right_neighbor_rank, 0 /* client mode */
+          right_port, 0 /* client mode */
       );
     }
 
@@ -239,6 +247,13 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     close(left_tcp_socket);
   }
 
+  /* Debug: Print bootstrap exchange results */
+  printf("[Process %d] DEBUG: Bootstrap exchange complete:\n", process_group->process_rank);
+  printf("[Process %d] DEBUG: left_local_info.qp=%u, left_remote_info.qp=%u\n",
+         process_group->process_rank, left_local_info.queue_pair_number, left_remote_info.queue_pair_number);
+  printf("[Process %d] DEBUG: right_local_info.qp=%u, right_remote_info.qp=%u\n",
+         process_group->process_rank, right_local_info.queue_pair_number, right_remote_info.queue_pair_number);
+
   if (right_tcp_socket >= 0) {
     /* Determine if we're acting as server or client for right neighbor */
     int right_server_mode =
@@ -272,7 +287,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     printf("[Process %d] DEBUG: Transitioning left QP to RTR with neighbor %d\n", 
            process_group->process_rank, left_neighbor_rank);
     if (rdma_transition_qp_to_rtr(
-            process_group->left_neighbor_qp, &right_remote_info,
+            process_group->left_neighbor_qp, &left_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
       fprintf(stderr, "[Process %d] ERROR: Failed to transition left QP to RTR state\n", 
               process_group->process_rank);
@@ -286,7 +301,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     printf("[Process %d] DEBUG: Transitioning right QP to RTR with neighbor %d\n", 
            process_group->process_rank, right_neighbor_rank);
     if (rdma_transition_qp_to_rtr(
-            process_group->right_neighbor_qp, &left_remote_info,
+            process_group->right_neighbor_qp, &right_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
       fprintf(stderr, "[Process %d] ERROR: Failed to transition right QP to RTR state\n", 
               process_group->process_rank);
