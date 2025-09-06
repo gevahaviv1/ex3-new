@@ -441,14 +441,28 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue,
     PG_CHECK_NULL(work_completion, "Work completion pointer is NULL");
     
     int num_completions;
+    int poll_count = 0;
+    const int max_polls = 10000000; /* 10M polls before timeout */
     
-    /* Poll until we get a completion */
+    /* Poll until we get a completion or timeout */
     do {
         num_completions = ibv_poll_cq(completion_queue, 1, work_completion);
         
         if (num_completions < 0) {
             fprintf(stderr, "Error polling completion queue\n");
             return PG_ERROR;
+        }
+        
+        if (num_completions == 0) {
+            poll_count++;
+            if (poll_count >= max_polls) {
+                fprintf(stderr, "Timeout waiting for RDMA completion after %d polls\n", max_polls);
+                return PG_ERROR;
+            }
+            /* Small delay to avoid busy waiting */
+            if (poll_count % 1000000 == 0) {
+                usleep(1000); /* 1ms delay every 1M polls */
+            }
         }
         
         /* Continue polling if no completions are ready */
