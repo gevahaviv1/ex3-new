@@ -244,44 +244,71 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   }
 
   /* Transition queue pairs to Ready-to-Receive (RTR) state */
+  printf("[Process %d] DEBUG: Transitioning queue pairs to RTR state...\n", 
+         process_group->process_rank);
 
   if (left_neighbor_rank != process_group->process_rank) {
+    printf("[Process %d] DEBUG: Transitioning left QP to RTR with neighbor %d\n", 
+           process_group->process_rank, left_neighbor_rank);
     if (rdma_transition_qp_to_rtr(
             process_group->left_neighbor_qp, &left_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
-      fprintf(stderr, "Failed to transition left QP to RTR state\n");
+      fprintf(stderr, "[Process %d] ERROR: Failed to transition left QP to RTR state\n", 
+              process_group->process_rank);
       return PG_ERROR;
     }
+    printf("[Process %d] DEBUG: Left QP successfully transitioned to RTR\n", 
+           process_group->process_rank);
   }
 
   if (right_neighbor_rank != process_group->process_rank) {
+    printf("[Process %d] DEBUG: Transitioning right QP to RTR with neighbor %d\n", 
+           process_group->process_rank, right_neighbor_rank);
     if (rdma_transition_qp_to_rtr(
             process_group->right_neighbor_qp, &right_remote_info,
             process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
-      fprintf(stderr, "Failed to transition right QP to RTR state\n");
+      fprintf(stderr, "[Process %d] ERROR: Failed to transition right QP to RTR state\n", 
+              process_group->process_rank);
       return PG_ERROR;
     }
+    printf("[Process %d] DEBUG: Right QP successfully transitioned to RTR\n", 
+           process_group->process_rank);
   }
 
   /* Transition queue pairs to Ready-to-Send (RTS) state */
+  printf("[Process %d] DEBUG: Transitioning queue pairs to RTS state...\n", 
+         process_group->process_rank);
 
   if (left_neighbor_rank != process_group->process_rank) {
+    printf("[Process %d] DEBUG: Transitioning left QP to RTS\n", 
+           process_group->process_rank);
     if (rdma_transition_qp_to_rts(process_group->left_neighbor_qp,
                                   left_local_info.packet_sequence_number) !=
         PG_SUCCESS) {
-      fprintf(stderr, "Failed to transition left QP to RTS state\n");
+      fprintf(stderr, "[Process %d] ERROR: Failed to transition left QP to RTS state\n", 
+              process_group->process_rank);
       return PG_ERROR;
     }
+    printf("[Process %d] DEBUG: Left QP successfully transitioned to RTS\n", 
+           process_group->process_rank);
   }
 
   if (right_neighbor_rank != process_group->process_rank) {
+    printf("[Process %d] DEBUG: Transitioning right QP to RTS\n", 
+           process_group->process_rank);
     if (rdma_transition_qp_to_rts(process_group->right_neighbor_qp,
                                   right_local_info.packet_sequence_number) !=
         PG_SUCCESS) {
-      fprintf(stderr, "Failed to transition right QP to RTS state\n");
+      fprintf(stderr, "[Process %d] ERROR: Failed to transition right QP to RTS state\n", 
+              process_group->process_rank);
       return PG_ERROR;
     }
+    printf("[Process %d] DEBUG: Right QP successfully transitioned to RTS\n", 
+           process_group->process_rank);
   }
+
+  printf("[Process %d] DEBUG: All queue pairs successfully connected\n", 
+         process_group->process_rank);
 
   return PG_SUCCESS;
 }
