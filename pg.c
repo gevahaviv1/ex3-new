@@ -420,43 +420,86 @@ int pg_cleanup(pg_handle_t process_group_handle) {
 static int perform_ring_communication_step(pg_handle_internal_t *process_group,
                                            void *send_data, void *receive_data,
                                            size_t data_size) {
+  int left_neighbor = (process_group->process_rank - 1 + process_group->process_group_size) % process_group->process_group_size;
+  int right_neighbor = (process_group->process_rank + 1) % process_group->process_group_size;
+  
+  printf("[Process %d] DEBUG: Starting ring communication step (data_size=%zu)\n", 
+         process_group->process_rank, data_size);
+  printf("[Process %d] DEBUG: Will receive from process %d, send to process %d\n", 
+         process_group->process_rank, left_neighbor, right_neighbor);
+  
   /* Post receive request for incoming data from left neighbor */
+  printf("[Process %d] DEBUG: Posting receive request from process %d...\n", 
+         process_group->process_rank, left_neighbor);
+  
   if (rdma_post_receive_request(process_group->left_neighbor_qp, receive_data,
                                 data_size,
                                 process_group->left_receive_mr) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to post receive request\n");
+    fprintf(stderr, "[Process %d] ERROR: Failed to post receive request\n", 
+            process_group->process_rank);
     return PG_ERROR;
   }
+  
+  printf("[Process %d] DEBUG: Receive request posted successfully\n", 
+         process_group->process_rank);
 
   /* Synchronization barrier: ensure all processes have posted receives */
+  printf("[Process %d] DEBUG: Entering synchronization barrier (1 second)...\n", 
+         process_group->process_rank);
 
   /* All processes wait the same amount to ensure synchronization */
   usleep(1000000); /* 1 second delay for all processes */
+  
+  printf("[Process %d] DEBUG: Synchronization barrier complete\n", 
+         process_group->process_rank);
 
   /* Post send request to right neighbor */
+  printf("[Process %d] DEBUG: Posting send request to process %d...\n", 
+         process_group->process_rank, right_neighbor);
+  
   if (rdma_post_send_request(process_group->right_neighbor_qp, send_data,
                              data_size,
                              process_group->left_send_mr) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to post send request\n");
+    fprintf(stderr, "[Process %d] ERROR: Failed to post send request\n", 
+            process_group->process_rank);
     return PG_ERROR;
   }
+  
+  printf("[Process %d] DEBUG: Send request posted successfully\n", 
+         process_group->process_rank);
 
   /* Wait for both operations to complete */
   struct ibv_wc work_completion;
 
   /* Wait for receive completion */
+  printf("[Process %d] DEBUG: Waiting for receive completion...\n", 
+         process_group->process_rank);
+  
   if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
                                &work_completion) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to complete receive operation\n");
+    fprintf(stderr, "[Process %d] ERROR: Failed to complete receive operation\n", 
+            process_group->process_rank);
     return PG_ERROR;
   }
+  
+  printf("[Process %d] DEBUG: Receive completed successfully\n", 
+         process_group->process_rank);
 
   /* Wait for send completion */
+  printf("[Process %d] DEBUG: Waiting for send completion...\n", 
+         process_group->process_rank);
+  
   if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
                                &work_completion) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to complete send operation\n");
+    fprintf(stderr, "[Process %d] ERROR: Failed to complete send operation\n", 
+            process_group->process_rank);
     return PG_ERROR;
   }
+  
+  printf("[Process %d] DEBUG: Send completed successfully\n", 
+         process_group->process_rank);
+  printf("[Process %d] DEBUG: Ring communication step completed successfully\n", 
+         process_group->process_rank);
 
   return PG_SUCCESS;
 }
@@ -481,7 +524,10 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   int process_rank = process_group->process_rank;
 
   /* Global synchronization barrier before starting collective operation */
+  printf("[Process %d] DEBUG: Starting reduce-scatter operation\n", process_rank);
+  printf("[Process %d] DEBUG: Entering global synchronization barrier (2 seconds)...\n", process_rank);
   usleep(2000000); /* 2 second initial barrier for all processes */
+  printf("[Process %d] DEBUG: Global synchronization barrier complete\n", process_rank);
 
   /* Handle single-process case */
   if (group_size == 1) {
@@ -554,7 +600,10 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
   int process_rank = process_group->process_rank;
 
   /* Global synchronization barrier before starting collective operation */
+  printf("[Process %d] DEBUG: Starting all-gather operation\n", process_rank);
+  printf("[Process %d] DEBUG: Entering global synchronization barrier (2 seconds)...\n", process_rank);
   usleep(2000000); /* 2 second initial barrier for all processes */
+  printf("[Process %d] DEBUG: Global synchronization barrier complete\n", process_rank);
 
   /* Handle single-process case */
   if (group_size == 1) {
