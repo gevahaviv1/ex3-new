@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 
 #include "pg.h"
 #include "pg_internal.h"
@@ -675,5 +675,108 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
     return PG_ERROR;
   }
 
+  return PG_SUCCESS;
+}
+
+/**
+ * Test basic RDMA connectivity between ring neighbors
+ * Sends small test messages to verify RDMA operations work
+ */
+int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
+  
+  PG_CHECK_NULL(process_group, "Process group handle is NULL");
+  
+  /* Skip test for single-process groups */
+  if (process_group->process_group_size == 1) {
+    printf("[Process %d] Single process group - RDMA connectivity test skipped\n", 
+           process_group->process_rank);
+    return PG_SUCCESS;
+  }
+  
+  printf("[Process %d] Testing RDMA connectivity with neighbors...\n", 
+         process_group->process_rank);
+  
+  /* Test data - small 64-byte message */
+  const size_t test_data_size = 64;
+  char test_send_data[64];
+  char test_receive_data[64];
+  
+  /* Initialize test data with process rank pattern */
+  for (int i = 0; i < 64; i++) {
+    test_send_data[i] = (char)(process_group->process_rank + i);
+  }
+  memset(test_receive_data, 0, test_data_size);
+  
+  /* Test 1: Send to right neighbor, receive from left neighbor */
+  printf("[Process %d] Test 1: Posting receive from left neighbor...\n", 
+         process_group->process_rank);
+  
+  if (rdma_post_receive_request(process_group->left_neighbor_qp, 
+                                test_receive_data, test_data_size,
+                                process_group->left_receive_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post receive request\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Small delay to ensure all processes have posted receives */
+  usleep(100000); /* 100ms */
+  
+  printf("[Process %d] Test 1: Posting send to right neighbor...\n", 
+         process_group->process_rank);
+  
+  if (rdma_post_send_request(process_group->right_neighbor_qp, 
+                             test_send_data, test_data_size,
+                             process_group->left_send_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post send request\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Wait for receive completion */
+  struct ibv_wc work_completion;
+  printf("[Process %d] Test 1: Waiting for receive completion...\n", 
+         process_group->process_rank);
+  
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, 
+                               &work_completion) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to complete receive operation\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Wait for send completion */
+  printf("[Process %d] Test 1: Waiting for send completion...\n", 
+         process_group->process_rank);
+  
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, 
+                               &work_completion) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to complete send operation\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Verify received data pattern */
+  int left_neighbor_rank = (process_group->process_rank - 1 + process_group->process_group_size) % process_group->process_group_size;
+  bool data_valid = true;
+  
+  for (int i = 0; i < 64; i++) {
+    char expected = (char)(left_neighbor_rank + i);
+    if (test_receive_data[i] != expected) {
+      data_valid = false;
+      break;
+    }
+  }
+  
+  if (data_valid) {
+    printf("[Process %d] RDMA connectivity test PASSED - data received correctly from process %d\n", 
+           process_group->process_rank, left_neighbor_rank);
+  } else {
+    printf("[Process %d] RDMA connectivity test FAILED - data corruption detected\n", 
+           process_group->process_rank);
+    return PG_ERROR;
+  }
+  
   return PG_SUCCESS;
 }
