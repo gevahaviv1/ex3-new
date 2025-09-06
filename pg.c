@@ -459,7 +459,7 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
   
   if (rdma_post_send_request(process_group->right_neighbor_qp, send_data,
                              data_size,
-                             process_group->left_send_mr) != PG_SUCCESS) {
+                             process_group->right_send_mr) != PG_SUCCESS) {
     fprintf(stderr, "[Process %d] ERROR: Failed to post send request\n", 
             process_group->process_rank);
     return PG_ERROR;
