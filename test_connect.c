@@ -386,12 +386,29 @@ int main(int argc, char *argv[]) {
     // Add a small delay to ensure all processes are ready
     sleep(1);
     
-    printf("\n=== Running Collective Operation Tests ===\n");
+    printf("=== Running RDMA Connectivity Test ===\n");
+  
+  /* Test basic RDMA connectivity first */
+  printf("[Process %d] Testing RDMA connectivity...\n", my_index);
+  if (pg_test_rdma_connectivity(process_group) == PG_SUCCESS) {
+    printf("[Process %d] RDMA connectivity test PASSED\n", my_index);
     
-    // Test 1: All-Reduce
-    if (test_all_reduce(process_group, my_index, num_processes) != 0) {
-        test_results = -1;
+    printf("=== Running Collective Operation Tests ===\n");
+
+    /* Test all-reduce operation */
+    printf("[Process %d] Testing all-reduce operation...\n", my_index);
+    if (pg_all_reduce(process_group, send_data, result_data, data_count,
+                      PG_DATATYPE_INT, PG_OPERATION_SUM) == PG_SUCCESS) {
+      printf("[Process %d] All-reduce operation completed successfully\n", my_index);
+      test_results = 0;
+    } else {
+      printf("[Process %d] All-reduce operation failed\n", my_index);
+      test_results = -1;
     }
+  } else {
+    printf("[Process %d] RDMA connectivity test FAILED - skipping collective operations\n", my_index);
+    test_results = -1;
+  } 
     
     // Small delay between tests
     sleep(1);

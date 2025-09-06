@@ -254,24 +254,19 @@ int pg_reduce_scatter(pg_handle_t process_group_handle,
  * @param send_buffer Input data buffer (chunk size should be element_count/group_size)
  * @param receive_buffer Output buffer for gathered data from all processes (size = element_count)
  * @param element_count Total number of elements in the final result (across all processes)
- * @param data_type Type of data elements (PG_DATATYPE_INT or PG_DATATYPE_DOUBLE)
- * @param unused_operation Unused parameter (maintained for API consistency)
- * @return PG_SUCCESS (0) on successful completion, PG_ERROR (-1) on failure
- * 
- * @note The receive_buffer will contain data from all processes:
- *       - Elements [0 : chunk_size) from process 0
- *       - Elements [chunk_size : 2*chunk_size) from process 1
- *       - And so on...
- * 
- * @warning The receive_buffer must be large enough to hold element_count elements.
- *          All processes must call this function with the same element_count.
  */
-int pg_all_gather(pg_handle_t process_group_handle,
-                 void *send_buffer,
-                 void *receive_buffer,
-                 int element_count,
-                 pg_datatype_t data_type, 
-                 pg_operation_t unused_operation);
+int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
+                  void *receive_buffer, int element_count,
+                  pg_datatype_t data_type);
+
+/**
+ * @brief Test basic RDMA connectivity between ring neighbors
+ * Sends small test messages to verify RDMA operations work
+ *
+ * @param process_group_handle Handle to initialized process group
+ * @return PG_SUCCESS if connectivity test passes, PG_ERROR otherwise
+ */
+int pg_test_rdma_connectivity(pg_handle_t process_group_handle);
 
 /**
  * @section usage_example Complete Usage Example

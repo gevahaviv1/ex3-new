@@ -1,5 +1,6 @@
 #include "pg.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,7 +131,6 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
                               process_group->process_group_size,
                               &left_neighbor_rank, &right_neighbor_rank);
 
-
   /* Skip self-connections for single-process groups */
   if (process_group->process_group_size == 1) {
     return PG_SUCCESS;
@@ -151,23 +151,24 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   /* Establish TCP connections for bootstrap information exchange */
   int left_tcp_socket = -1, right_tcp_socket = -1;
 
-  /* 
-   * Fix deadlock: Use rank-based ordering to determine who acts as server/client
-   * Lower rank process acts as server, higher rank acts as client
+  /*
+   * Fix deadlock: Use rank-based ordering to determine who acts as
+   * server/client Lower rank process acts as server, higher rank acts as client
    * This breaks the circular dependency
    */
-  
+
   /* Handle left neighbor connection */
   if (left_neighbor_rank != process_group->process_rank) {
     if (process_group->process_rank < left_neighbor_rank) {
       /* I have lower rank, act as server */
-      
+
       left_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, PG_DEFAULT_PORT + process_group->process_rank, 1 /* server mode */
+          NULL, PG_DEFAULT_PORT + process_group->process_rank,
+          1 /* server mode */
       );
     } else {
       /* I have higher rank, act as client */
-      
+
       left_tcp_socket = pgnet_establish_tcp_connection(
           process_group->hostname_list[left_neighbor_rank],
           PG_DEFAULT_PORT + left_neighbor_rank, 0 /* client mode */
@@ -175,23 +176,24 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     }
 
     if (left_tcp_socket < 0) {
-      fprintf(stderr, "Failed to establish TCP connection with left neighbor\n");
+      fprintf(stderr,
+              "Failed to establish TCP connection with left neighbor\n");
       return PG_ERROR;
     }
-    
   }
 
   /* Handle right neighbor connection */
   if (right_neighbor_rank != process_group->process_rank) {
     if (process_group->process_rank < right_neighbor_rank) {
       /* I have lower rank, act as server */
-      
+
       right_tcp_socket = pgnet_establish_tcp_connection(
-          NULL, PG_DEFAULT_PORT + process_group->process_rank, 1 /* server mode */
+          NULL, PG_DEFAULT_PORT + process_group->process_rank,
+          1 /* server mode */
       );
     } else {
       /* I have higher rank, act as client */
-      
+
       right_tcp_socket = pgnet_establish_tcp_connection(
           process_group->hostname_list[right_neighbor_rank],
           PG_DEFAULT_PORT + right_neighbor_rank, 0 /* client mode */
@@ -199,18 +201,19 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     }
 
     if (right_tcp_socket < 0) {
-      fprintf(stderr, "Failed to establish TCP connection with right neighbor\n");
+      fprintf(stderr,
+              "Failed to establish TCP connection with right neighbor\n");
       if (left_tcp_socket >= 0) close(left_tcp_socket);
       return PG_ERROR;
     }
-    
   }
 
   /* Exchange bootstrap information over TCP */
   if (left_tcp_socket >= 0) {
     /* Determine if we're acting as server or client for left neighbor */
-    int left_server_mode = (process_group->process_rank < left_neighbor_rank) ? 1 : 0;
-    
+    int left_server_mode =
+        (process_group->process_rank < left_neighbor_rank) ? 1 : 0;
+
     if (pgnet_exchange_rdma_bootstrap_info(left_tcp_socket, &left_local_info,
                                            &left_remote_info,
                                            left_server_mode) != PG_SUCCESS) {
@@ -224,12 +227,14 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
   if (right_tcp_socket >= 0) {
     /* Determine if we're acting as server or client for right neighbor */
-    int right_server_mode = (process_group->process_rank < right_neighbor_rank) ? 1 : 0;
-    
+    int right_server_mode =
+        (process_group->process_rank < right_neighbor_rank) ? 1 : 0;
+
     if (pgnet_exchange_rdma_bootstrap_info(right_tcp_socket, &right_local_info,
                                            &right_remote_info,
                                            right_server_mode) != PG_SUCCESS) {
-      fprintf(stderr, "Failed to exchange bootstrap info with right neighbor\n");
+      fprintf(stderr,
+              "Failed to exchange bootstrap info with right neighbor\n");
       close(right_tcp_socket);
       return PG_ERROR;
     }
@@ -237,7 +242,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   }
 
   /* Transition queue pairs to Ready-to-Receive (RTR) state */
-  
+
   if (left_neighbor_rank != process_group->process_rank) {
     if (rdma_transition_qp_to_rtr(
             process_group->left_neighbor_qp, &left_remote_info,
@@ -257,7 +262,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   }
 
   /* Transition queue pairs to Ready-to-Send (RTS) state */
-  
+
   if (left_neighbor_rank != process_group->process_rank) {
     if (rdma_transition_qp_to_rts(process_group->left_neighbor_qp,
                                   left_local_info.packet_sequence_number) !=
@@ -290,14 +295,12 @@ int pg_initialize(const char *server_list_string,
   PG_CHECK_NULL(server_list_string, "Server list string is NULL");
   PG_CHECK_NULL(process_group_handle, "Process group handle pointer is NULL");
 
-
   /* Allocate and initialize process group structure */
   pg_handle_internal_t *process_group = calloc(1, sizeof(pg_handle_internal_t));
   if (!process_group) {
     fprintf(stderr, "Failed to allocate process group structure\n");
     return PG_ERROR;
   }
-
 
   /* Parse hostname list and determine process topology */
   process_group->hostname_list = pgnet_parse_hostname_list(
@@ -307,7 +310,6 @@ int pg_initialize(const char *server_list_string,
     free(process_group);
     return PG_ERROR;
   }
-
 
   /* Determine this process's rank within the group */
   process_group->process_rank = pgnet_determine_process_rank(
@@ -320,7 +322,6 @@ int pg_initialize(const char *server_list_string,
     return PG_ERROR;
   }
 
-
   /* Initialize RDMA device context */
   if (rdma_initialize_context(&process_group->rdma_context, NULL) !=
       PG_SUCCESS) {
@@ -330,7 +331,6 @@ int pg_initialize(const char *server_list_string,
     free(process_group);
     return PG_ERROR;
   }
-
 
   /* Configure buffer sizes */
   process_group->total_buffer_size_bytes = PG_BUFFER_SIZE_BYTES;
@@ -342,13 +342,11 @@ int pg_initialize(const char *server_list_string,
     return PG_ERROR;
   }
 
-
   /* Register buffers with RDMA device */
   if (register_communication_buffers(process_group) != PG_SUCCESS) {
     pg_cleanup(process_group);
     return PG_ERROR;
   }
-
 
   /* Create and initialize queue pairs for ring topology */
   if (create_ring_topology_queue_pairs(process_group) != PG_SUCCESS) {
@@ -356,13 +354,11 @@ int pg_initialize(const char *server_list_string,
     return PG_ERROR;
   }
 
-
   /* Establish RDMA connections with ring neighbors */
   if (establish_neighbor_connections(process_group) != PG_SUCCESS) {
     pg_cleanup(process_group);
     return PG_ERROR;
   }
-
 
   /* Return initialized handle to caller */
   *process_group_handle = process_group;
@@ -422,7 +418,6 @@ int pg_cleanup(pg_handle_t process_group_handle) {
 static int perform_ring_communication_step(pg_handle_internal_t *process_group,
                                            void *send_data, void *receive_data,
                                            size_t data_size) {
-
   /* Post receive request for incoming data from left neighbor */
   if (rdma_post_receive_request(process_group->left_neighbor_qp, receive_data,
                                 data_size,
@@ -432,7 +427,7 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
   }
 
   /* Synchronization barrier: ensure all processes have posted receives */
-  
+
   /* All processes wait the same amount to ensure synchronization */
   usleep(200000); /* 200ms delay for all processes */
 
@@ -545,7 +540,8 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
 
 int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
                   void *receive_buffer, int element_count,
-                  pg_datatype_t data_type, pg_operation_t unused_operation __attribute__((unused))) {
+                  pg_datatype_t data_type,
+                  pg_operation_t unused_operation __attribute__((unused))) {
   pg_handle_internal_t *process_group =
       (pg_handle_internal_t *)process_group_handle;
 
