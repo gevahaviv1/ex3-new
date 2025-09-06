@@ -130,8 +130,14 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
                               process_group->process_group_size,
                               &left_neighbor_rank, &right_neighbor_rank);
 
+  printf("[DEBUG] Process %d: left neighbor = %d, right neighbor = %d\n", 
+         process_group->process_rank, left_neighbor_rank, right_neighbor_rank);
+  fflush(stdout);
+
   /* Skip self-connections for single-process groups */
   if (process_group->process_group_size == 1) {
+    printf("[DEBUG] Single process group, skipping neighbor connections\n");
+    fflush(stdout);
     return PG_SUCCESS;
   }
 
@@ -152,6 +158,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
   /* Connect to left neighbor (act as server) */
   if (left_neighbor_rank != process_group->process_rank) {
+    printf("[DEBUG] Process %d: Setting up server socket for left neighbor %d on port %d\n", 
+           process_group->process_rank, left_neighbor_rank, PG_DEFAULT_PORT + process_group->process_rank);
+    fflush(stdout);
+    
     left_tcp_socket = pgnet_establish_tcp_connection(
         NULL, PG_DEFAULT_PORT + process_group->process_rank, 1 /* server mode */
     );
@@ -161,10 +171,18 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
               "Failed to establish TCP connection with left neighbor\n");
       return PG_ERROR;
     }
+    
+    printf("[DEBUG] Process %d: Server socket established for left neighbor\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   /* Connect to right neighbor (act as client) */
   if (right_neighbor_rank != process_group->process_rank) {
+    printf("[DEBUG] Process %d: Connecting as client to right neighbor %d at %s:%d\n", 
+           process_group->process_rank, right_neighbor_rank, 
+           process_group->hostname_list[right_neighbor_rank], PG_DEFAULT_PORT + right_neighbor_rank);
+    fflush(stdout);
+    
     right_tcp_socket = pgnet_establish_tcp_connection(
         process_group->hostname_list[right_neighbor_rank],
         PG_DEFAULT_PORT + right_neighbor_rank, 0 /* client mode */
@@ -176,6 +194,9 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       if (left_tcp_socket >= 0) close(left_tcp_socket);
       return PG_ERROR;
     }
+    
+    printf("[DEBUG] Process %d: Client connection established to right neighbor\n", process_group->process_rank);
+    fflush(stdout);
   }
 
   /* Exchange bootstrap information over TCP */
@@ -255,12 +276,18 @@ int pg_initialize(const char *server_list_string,
   PG_CHECK_NULL(server_list_string, "Server list string is NULL");
   PG_CHECK_NULL(process_group_handle, "Process group handle pointer is NULL");
 
+  printf("[DEBUG] Starting process group initialization...\n");
+  fflush(stdout);
+
   /* Allocate and initialize process group structure */
   pg_handle_internal_t *process_group = calloc(1, sizeof(pg_handle_internal_t));
   if (!process_group) {
     fprintf(stderr, "Failed to allocate process group structure\n");
     return PG_ERROR;
   }
+
+  printf("[DEBUG] Allocated process group structure\n");
+  fflush(stdout);
 
   /* Parse hostname list and determine process topology */
   process_group->hostname_list = pgnet_parse_hostname_list(
@@ -270,6 +297,9 @@ int pg_initialize(const char *server_list_string,
     free(process_group);
     return PG_ERROR;
   }
+
+  printf("[DEBUG] Parsed hostname list, group size: %d\n", process_group->process_group_size);
+  fflush(stdout);
 
   /* Determine this process's rank within the group */
   process_group->process_rank = pgnet_determine_process_rank(
@@ -282,7 +312,12 @@ int pg_initialize(const char *server_list_string,
     return PG_ERROR;
   }
 
+  printf("[DEBUG] Determined process rank: %d\n", process_group->process_rank);
+  fflush(stdout);
+
   /* Initialize RDMA device context */
+  printf("[DEBUG] Initializing RDMA context...\n");
+  fflush(stdout);
   if (rdma_initialize_context(&process_group->rdma_context, NULL) !=
       PG_SUCCESS) {
     fprintf(stderr, "Failed to initialize RDMA context\n");
@@ -292,36 +327,61 @@ int pg_initialize(const char *server_list_string,
     return PG_ERROR;
   }
 
+  printf("[DEBUG] RDMA context initialized successfully\n");
+  fflush(stdout);
+
   /* Configure buffer sizes */
   process_group->total_buffer_size_bytes = PG_BUFFER_SIZE_BYTES;
   process_group->chunk_size_bytes = PG_CHUNK_SIZE_BYTES;
 
   /* Allocate communication buffers */
+  printf("[DEBUG] Allocating communication buffers...\n");
+  fflush(stdout);
   if (allocate_communication_buffers(process_group) != PG_SUCCESS) {
     pg_cleanup(process_group);
     return PG_ERROR;
   }
 
+  printf("[DEBUG] Communication buffers allocated successfully\n");
+  fflush(stdout);
+
   /* Register buffers with RDMA device */
+  printf("[DEBUG] Registering buffers with RDMA device...\n");
+  fflush(stdout);
   if (register_communication_buffers(process_group) != PG_SUCCESS) {
     pg_cleanup(process_group);
     return PG_ERROR;
   }
 
+  printf("[DEBUG] Buffers registered with RDMA device successfully\n");
+  fflush(stdout);
+
   /* Create and initialize queue pairs for ring topology */
+  printf("[DEBUG] Creating queue pairs for ring topology...\n");
+  fflush(stdout);
   if (create_ring_topology_queue_pairs(process_group) != PG_SUCCESS) {
     pg_cleanup(process_group);
     return PG_ERROR;
   }
 
+  printf("[DEBUG] Queue pairs created successfully\n");
+  fflush(stdout);
+
   /* Establish RDMA connections with ring neighbors */
+  printf("[DEBUG] Establishing connections with ring neighbors...\n");
+  fflush(stdout);
   if (establish_neighbor_connections(process_group) != PG_SUCCESS) {
     pg_cleanup(process_group);
     return PG_ERROR;
   }
 
+  printf("[DEBUG] Ring neighbor connections established successfully\n");
+  fflush(stdout);
+
   /* Return initialized handle to caller */
   *process_group_handle = process_group;
+  printf("[DEBUG] Process group initialization completed successfully\n");
+  fflush(stdout);
   return PG_SUCCESS;
 }
 
