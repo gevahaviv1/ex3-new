@@ -541,7 +541,7 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   size_t chunk_size_bytes = (element_count / group_size) * element_size;
 
   /* Copy input data to working buffer */
-  memcpy(process_group->left_send_buffer, send_buffer, total_data_size);
+  memcpy(process_group->right_send_buffer, send_buffer, total_data_size);
 
   /* Perform reduce-scatter algorithm with (group_size - 1) steps */
   for (int communication_step = 0; communication_step < group_size - 1;
@@ -552,14 +552,14 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
 
     /* Perform ring communication step */
     if (perform_ring_communication_step(process_group,
-                                        process_group->left_send_buffer,
+                                        process_group->right_send_buffer,
                                         process_group->left_receive_buffer,
                                         total_data_size) != PG_SUCCESS) {
       return PG_ERROR;
     }
 
     /* Apply reduction operation to the designated chunk */
-    char *local_chunk_ptr = (char *)process_group->left_send_buffer +
+    char *local_chunk_ptr = (char *)process_group->right_send_buffer +
                             (reduction_chunk_index * chunk_size_bytes);
     char *remote_chunk_ptr = (char *)process_group->left_receive_buffer +
                              (reduction_chunk_index * chunk_size_bytes);
@@ -570,16 +570,16 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
                                  data_type, reduction_op);
 
     /* Prepare data for next communication step */
-    memcpy(process_group->left_send_buffer, process_group->left_receive_buffer,
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer,
            total_data_size);
-    memcpy((char *)process_group->left_send_buffer +
+    memcpy((char *)process_group->right_send_buffer +
                (reduction_chunk_index * chunk_size_bytes),
            local_chunk_ptr, chunk_size_bytes);
   }
 
   /* Extract this process's final result chunk */
   int my_chunk_index = process_rank;
-  char *my_result_chunk = (char *)process_group->left_send_buffer +
+  char *my_result_chunk = (char *)process_group->right_send_buffer +
                           (my_chunk_index * chunk_size_bytes);
   memcpy(receive_buffer, my_result_chunk, chunk_size_bytes);
 
@@ -623,14 +623,14 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
   memcpy(my_data_position, send_buffer, chunk_size_bytes);
 
   /* Copy initialized data to working buffer */
-  memcpy(process_group->left_send_buffer, receive_buffer, total_data_size);
+  memcpy(process_group->right_send_buffer, receive_buffer, total_data_size);
 
   /* Perform all-gather algorithm with (group_size - 1) steps */
   for (int communication_step = 0; communication_step < group_size - 1;
        communication_step++) {
     /* Perform ring communication step */
     if (perform_ring_communication_step(process_group,
-                                        process_group->left_send_buffer,
+                                        process_group->right_send_buffer,
                                         process_group->left_receive_buffer,
                                         total_data_size) != PG_SUCCESS) {
       return PG_ERROR;
@@ -638,7 +638,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
 
     /* Merge received data with local accumulated data */
     for (int chunk_index = 0; chunk_index < group_size; chunk_index++) {
-      char *local_chunk_ptr = (char *)process_group->left_send_buffer +
+      char *local_chunk_ptr = (char *)process_group->right_send_buffer +
                               (chunk_index * chunk_size_bytes);
       char *remote_chunk_ptr = (char *)process_group->left_receive_buffer +
                                (chunk_index * chunk_size_bytes);
@@ -670,12 +670,12 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
     }
 
     /* Update working buffer with merged data */
-    memcpy(process_group->left_send_buffer, process_group->left_receive_buffer,
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer,
            total_data_size);
 
     /* Restore any data we already had accumulated */
     for (int chunk_index = 0; chunk_index < group_size; chunk_index++) {
-      char *working_chunk_ptr = (char *)process_group->left_send_buffer +
+      char *working_chunk_ptr = (char *)process_group->right_send_buffer +
                                 (chunk_index * chunk_size_bytes);
       char *accumulated_chunk_ptr =
           (char *)receive_buffer + (chunk_index * chunk_size_bytes);
@@ -696,7 +696,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
   }
 
   /* Copy final result to output buffer */
-  memcpy(receive_buffer, process_group->left_send_buffer, total_data_size);
+  memcpy(receive_buffer, process_group->right_send_buffer, total_data_size);
   return PG_SUCCESS;
 }
 
