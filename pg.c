@@ -1,15 +1,15 @@
 #include "pg.h"
+#include "pg_internal.h"
+#include "pg_net.h"
+#include "RDMA_api.h"
+#include "constants.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <unistd.h>
-
-#include "RDMA_api.h"
-#include "constants.h"
-#include "pg_internal.h"
-#include "pg_net.h"
+#include <stdbool.h>
 
 /*
  * =============================================================================
@@ -540,8 +540,7 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
 
 int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
                   void *receive_buffer, int element_count,
-                  pg_datatype_t data_type,
-                  pg_operation_t unused_operation __attribute__((unused))) {
+                  pg_datatype_t data_type) {
   pg_handle_internal_t *process_group =
       (pg_handle_internal_t *)process_group_handle;
 
