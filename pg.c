@@ -849,14 +849,14 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   /* Wait for completions */
   printf("[Process %d] Waiting for receive completion...\n", process_group->process_rank);
   struct ibv_wc work_completion;
-  if (rdma_poll_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
     fprintf(stderr, "[Process %d] Point-to-point test FAILED - receive completion failed\n", 
             process_group->process_rank);
     return PG_ERROR;
   }
   
   printf("[Process %d] Waiting for send completion...\n", process_group->process_rank);
-  if (rdma_poll_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
     fprintf(stderr, "[Process %d] Point-to-point test FAILED - send completion failed\n", 
             process_group->process_rank);
     return PG_ERROR;
