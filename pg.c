@@ -235,7 +235,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     
     printf("[Process %d] DEBUG: Received from left neighbor %d: QP num=%u, LID=%u\n", 
            process_group->process_rank, left_neighbor_rank, 
-           left_remote_info.queue_pair_number, left_remote_info.local_id);
+           left_remote_info.queue_pair_number, left_remote_info.local_identifier);
     close(left_tcp_socket);
   }
 
@@ -260,7 +260,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     
     printf("[Process %d] DEBUG: Received from right neighbor %d: QP num=%u, LID=%u\n", 
            process_group->process_rank, right_neighbor_rank, 
-           right_remote_info.queue_pair_number, right_remote_info.local_id);
+           right_remote_info.queue_pair_number, right_remote_info.local_identifier);
     close(right_tcp_socket);
   }
 
