@@ -151,9 +151,9 @@ void rdma_cleanup_context(rdma_context_t *rdma_ctx) {
 struct ibv_mr *rdma_register_memory_buffer(rdma_context_t *rdma_ctx, 
                                           void *buffer_ptr, 
                                           size_t buffer_size) {
-    PG_CHECK_NULL(rdma_ctx, "RDMA context is NULL");
-    PG_CHECK_NULL(rdma_ctx->protection_domain, "Protection domain is NULL");
-    PG_CHECK_NULL(buffer_ptr, "Buffer pointer is NULL");
+    PG_CHECK_NULL_PTR(rdma_ctx, "RDMA context is NULL");
+    PG_CHECK_NULL_PTR(rdma_ctx->protection_domain, "Protection domain is NULL");
+    PG_CHECK_NULL_PTR(buffer_ptr, "Buffer pointer is NULL");
     
     if (buffer_size == 0) {
         fprintf(stderr, "Buffer size cannot be zero\n");

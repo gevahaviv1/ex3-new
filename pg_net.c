@@ -199,8 +199,8 @@ static int receive_data_reliably(int socket_fd, void *data_buffer, size_t data_s
  */
 
 char **pgnet_parse_hostname_list(const char *server_list_string, int *hostname_count_ptr) {
-    PG_CHECK_NULL(server_list_string, "Server list string is NULL");
-    PG_CHECK_NULL(hostname_count_ptr, "Hostname count pointer is NULL");
+    PG_CHECK_NULL_PTR(server_list_string, "Server list string is NULL");
+    PG_CHECK_NULL_PTR(hostname_count_ptr, "Hostname count pointer is NULL");
     
     /* Create working copy of the input string */
     char *list_copy = strdup(server_list_string);

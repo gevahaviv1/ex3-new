@@ -74,6 +74,22 @@
 /* Check pointer and return error if NULL */
 #define PG_CHECK_NULL(ptr, msg) PG_CHECK_ERROR((ptr) != NULL, msg)
 
+/* Check pointer and return NULL if condition fails (for pointer-returning functions) */
+#define PG_CHECK_NULL_PTR(ptr, msg) do { \
+    if (!(ptr)) { \
+        fprintf(stderr, "Error: %s\n", msg); \
+        return NULL; \
+    } \
+} while(0)
+
+/* Check condition and return NULL if false (for pointer-returning functions) */
+#define PG_CHECK_ERROR_PTR(condition, msg) do { \
+    if (!(condition)) { \
+        fprintf(stderr, "Error: %s\n", msg); \
+        return NULL; \
+    } \
+} while(0)
+
 /* Check RDMA operation result and return error if failed */
 #define PG_CHECK_RDMA(result, msg) PG_CHECK_ERROR((result) == 0, msg)
 
