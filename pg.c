@@ -12,6 +12,9 @@
 #include <math.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /*
  * =============================================================================
