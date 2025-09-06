@@ -749,10 +749,6 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   printf("[Process %d] Testing RDMA connectivity with neighbors...\n", 
          process_group->process_rank);
   
-  /* Simple connectivity test: just verify queue pairs are in correct state */
-  printf("[Process %d] Checking RDMA queue pair states...\n", 
-         process_group->process_rank);
-  
   /* Check if queue pairs are properly initialized */
   if (!process_group->left_neighbor_qp || !process_group->right_neighbor_qp) {
     fprintf(stderr, "[Process %d] Queue pairs not properly initialized\n", 
@@ -771,12 +767,87 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   printf("[Process %d] Queue pairs and memory regions are properly initialized\n", 
          process_group->process_rank);
   
-  /* For now, skip the actual data transfer test since it requires all processes */
-  printf("[Process %d] Skipping data transfer test (requires all processes running)\n", 
+  /* Test actual RDMA data transfer with small message */
+  printf("[Process %d] Testing actual RDMA data transfer...\n", 
          process_group->process_rank);
   
-  printf("[Process %d] RDMA connectivity test PASSED - basic setup is correct\n", 
-         process_group->process_rank);
+  /* Use small test data */
+  const size_t test_data_size = 64;
+  char *test_send_data = (char *)process_group->right_send_buffer;
+  char *test_receive_data = (char *)process_group->left_receive_buffer;
+  
+  /* Initialize test pattern */
+  for (int i = 0; i < 64; i++) {
+    test_send_data[i] = (char)(process_group->process_rank + i);
+  }
+  memset(test_receive_data, 0, test_data_size);
+  
+  int left_neighbor = (process_group->process_rank - 1 + process_group->process_group_size) % process_group->process_group_size;
+  int right_neighbor = (process_group->process_rank + 1) % process_group->process_group_size;
+  
+  printf("[Process %d] Will receive from process %d, send to process %d\n", 
+         process_group->process_rank, left_neighbor, right_neighbor);
+  
+  /* Post receive request */
+  printf("[Process %d] Posting receive request...\n", process_group->process_rank);
+  if (rdma_post_receive_request(process_group->left_neighbor_qp, 
+                                test_receive_data, test_data_size,
+                                process_group->left_receive_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post receive request\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Wait for all processes to post receives */
+  usleep(2000000); /* 2 seconds */
+  
+  /* Post send request */
+  printf("[Process %d] Posting send request...\n", process_group->process_rank);
+  if (rdma_post_send_request(process_group->right_neighbor_qp, 
+                             test_send_data, test_data_size,
+                             process_group->right_send_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post send request\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Try to complete operations with timeout */
+  struct ibv_wc work_completion;
+  printf("[Process %d] Waiting for receive completion...\n", process_group->process_rank);
+  
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, 
+                               &work_completion) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] RDMA connectivity test FAILED - receive completion failed\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  printf("[Process %d] Waiting for send completion...\n", process_group->process_rank);
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, 
+                               &work_completion) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] RDMA connectivity test FAILED - send completion failed\n", 
+            process_group->process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Verify data integrity */
+  bool data_valid = true;
+  for (int i = 0; i < 64; i++) {
+    char expected = (char)(left_neighbor + i);
+    if (test_receive_data[i] != expected) {
+      data_valid = false;
+      break;
+    }
+  }
+  
+  if (data_valid) {
+    printf("[Process %d] RDMA connectivity test PASSED - data received correctly\n", 
+           process_group->process_rank);
+  } else {
+    printf("[Process %d] RDMA connectivity test FAILED - data corruption detected\n", 
+           process_group->process_rank);
+    return PG_ERROR;
+  }
   
   return PG_SUCCESS;
 }
