@@ -159,26 +159,19 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   /* Establish TCP connections for bootstrap information exchange */
   int left_tcp_socket = -1, right_tcp_socket = -1;
 
-  int N = process_group->process_group_size;
   int my = process_group->process_rank;
+  int L = left_neighbor_rank, R = right_neighbor_rank;
+  int left_needed  = (L != my);
+  int right_needed = (R != my);
+  int left_server  = (my < L);
+  int right_server = (my < R);
 
-  int L = left_neighbor_rank;
-  int R = right_neighbor_rank;
-
-  // Symmetric per-pair ports (same number seen by both sides)
-  int left_pair_port  = PG_DEFAULT_PORT + ( (L < my ? L : my) * N + (L > my ? L : my) );
-  int right_pair_port = PG_DEFAULT_PORT + ( (R < my ? R : my) * N + (R > my ? R : my) );
+  int N = process_group->process_group_size;
+  int left_pair_port  = PG_DEFAULT_PORT + ((L < my ? L : my) * N + (L > my ? L : my));
+  int right_pair_port = PG_DEFAULT_PORT + ((R < my ? R : my) * N + (R > my ? R : my));
 
   printf("[Process %d] DEBUG: left-pair port=%d (me=%d, L=%d)\n",  my, left_pair_port,  my, L);
   printf("[Process %d] DEBUG: right-pair port=%d (me=%d, R=%d)\n", my, right_pair_port, my, R);
-
-  int left_server  = (my < L);
-  int right_server = (my < R);
-  int left_needed  = (L != my);
-  int right_needed = (R != my);
-
-  int left_tcp_socket  = -1;
-  int right_tcp_socket = -1;
 
   /* Phase A — servers first (may block in accept) */
   if (left_needed && left_server) {
