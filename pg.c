@@ -191,17 +191,21 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     int *client_sockets = calloc(world_size, sizeof(int));
     for (int i = 0; i < world_size; i++) client_sockets[i] = -1;
     
+    int connected_ranks = 1; // Count rank 0
     for (int i = 1; i < world_size; i++) {
       struct sockaddr_in client_addr;
       socklen_t addr_len = sizeof(client_addr);
       
+      /* Set socket timeout to detect missing ranks */
+      struct timeval timeout;
+      timeout.tv_sec = 5;  // 5 second timeout
+      timeout.tv_usec = 0;
+      setsockopt(server_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+      
       int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
       if (client_socket < 0) {
-        fprintf(stderr, "Failed to accept client connection\n");
-        free(client_sockets);
-        free(rank_infos);
-        close(server_socket);
-        return PG_ERROR;
+        printf("[Process 0] DEBUG: Timeout waiting for rank %d - proceeding with %d ranks\n", i, connected_ranks);
+        break; // Stop waiting for more ranks
       }
 
       /* Receive rank ID and QP info */
@@ -226,18 +230,21 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       rank_infos[client_rank].qp_right = client_right.queue_pair_number;
       rank_infos[client_rank].lid = client_left.local_identifier;
       client_sockets[client_rank] = client_socket;
+      connected_ranks++;
 
       printf("[Process 0] DEBUG: Collected from rank %d: left_qp=%u, right_qp=%u, lid=%u\n",
              client_rank, client_left.queue_pair_number, client_right.queue_pair_number, client_left.local_identifier);
     }
+
+    printf("[Process 0] DEBUG: Phase 1 complete - collected info from %d ranks\n", connected_ranks);
 
     printf("[Process 0] DEBUG: Phase 2 - Sending neighbor info to all ranks\n");
     
     for (int rank = 1; rank < world_size; rank++) {
       if (client_sockets[rank] < 0) continue;
       
-      int left_neighbor = (rank - 1 + world_size) % world_size;
-      int right_neighbor = (rank + 1) % world_size;
+      int left_neighbor = (rank - 1 + connected_ranks) % connected_ranks;
+      int right_neighbor = (rank + 1) % connected_ranks;
 
       rdma_qp_bootstrap_info_t left_remote, right_remote;
       left_remote.queue_pair_number = rank_infos[left_neighbor].qp_left;
@@ -258,9 +265,9 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     
     free(client_sockets);
 
-    /* Set up rank 0's own neighbor info */
-    int left_neighbor = world_size - 1;
-    int right_neighbor = 1;
+    /* Set up rank 0's own neighbor info based on connected ranks */
+    int left_neighbor = (connected_ranks - 1) % connected_ranks;
+    int right_neighbor = 1 % connected_ranks;
 
     left_remote_info.queue_pair_number = rank_infos[left_neighbor].qp_left;
     left_remote_info.local_identifier = rank_infos[left_neighbor].lid;
