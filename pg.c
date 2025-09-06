@@ -211,10 +211,18 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   }
 
   /* Exchange bootstrap information over TCP */
+  printf("[Process %d] DEBUG: Exchanging bootstrap information...\n", 
+         process_group->process_rank);
+  
   if (left_tcp_socket >= 0) {
     /* Determine if we're acting as server or client for left neighbor */
     int left_server_mode =
         (process_group->process_rank < left_neighbor_rank) ? 1 : 0;
+
+    printf("[Process %d] DEBUG: Exchanging with left neighbor %d (server_mode=%d)\n", 
+           process_group->process_rank, left_neighbor_rank, left_server_mode);
+    printf("[Process %d] DEBUG: Local QP num for left: %u\n", 
+           process_group->process_rank, left_local_info.queue_pair_number);
 
     if (pgnet_exchange_rdma_bootstrap_info(left_tcp_socket, &left_local_info,
                                            &left_remote_info,
@@ -224,6 +232,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       if (right_tcp_socket >= 0) close(right_tcp_socket);
       return PG_ERROR;
     }
+    
+    printf("[Process %d] DEBUG: Received from left neighbor %d: QP num=%u, LID=%u\n", 
+           process_group->process_rank, left_neighbor_rank, 
+           left_remote_info.queue_pair_number, left_remote_info.local_id);
     close(left_tcp_socket);
   }
 
@@ -231,6 +243,11 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     /* Determine if we're acting as server or client for right neighbor */
     int right_server_mode =
         (process_group->process_rank < right_neighbor_rank) ? 1 : 0;
+
+    printf("[Process %d] DEBUG: Exchanging with right neighbor %d (server_mode=%d)\n", 
+           process_group->process_rank, right_neighbor_rank, right_server_mode);
+    printf("[Process %d] DEBUG: Local QP num for right: %u\n", 
+           process_group->process_rank, right_local_info.queue_pair_number);
 
     if (pgnet_exchange_rdma_bootstrap_info(right_tcp_socket, &right_local_info,
                                            &right_remote_info,
@@ -240,6 +257,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       close(right_tcp_socket);
       return PG_ERROR;
     }
+    
+    printf("[Process %d] DEBUG: Received from right neighbor %d: QP num=%u, LID=%u\n", 
+           process_group->process_rank, right_neighbor_rank, 
+           right_remote_info.queue_pair_number, right_remote_info.local_id);
     close(right_tcp_socket);
   }
 
