@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "pg.h"
 #include "pg_internal.h"
 #include "pg_net.h"
@@ -668,7 +670,7 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
 
   /* Phase 2: All-gather to distribute complete results */
   if (pg_all_gather(process_group_handle, receive_buffer, receive_buffer,
-                    element_count, data_type, reduction_op) != PG_SUCCESS) {
+                    element_count, data_type) != PG_SUCCESS) {
     fprintf(stderr, "All-reduce failed during all-gather phase\n");
     return PG_ERROR;
   }
