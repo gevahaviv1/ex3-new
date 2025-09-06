@@ -697,10 +697,12 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   printf("[Process %d] Testing RDMA connectivity with neighbors...\n", 
          process_group->process_rank);
   
-  /* Test data - small 64-byte message */
+  /* Test data - small 64-byte message using registered buffers */
   const size_t test_data_size = 64;
-  char test_send_data[64];
-  char test_receive_data[64];
+  
+  /* Use the already-registered communication buffers */
+  char *test_send_data = (char *)process_group->left_send_buffer;
+  char *test_receive_data = (char *)process_group->left_receive_buffer;
   
   /* Initialize test data with process rank pattern */
   for (int i = 0; i < 64; i++) {
