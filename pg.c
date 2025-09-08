@@ -202,7 +202,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     while (connected_ranks < world_size &&
            (time(NULL) - start_time) < TOTAL_TIMEOUT) {
       struct sockaddr_in client_addr;
-      socklen_t addr_len = sizeof(client_addr);
+      socklen_t addr_len;
 
       printf(
           "[Process 0] DEBUG: Waiting for any rank to connect (%d/%d "
@@ -234,6 +234,8 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
           "[Process 0] DEBUG: select() indicates connection ready, calling "
           "accept()...\n");
 
+      /* Initialize addr_len before each accept() call */
+      addr_len = sizeof(client_addr);
       int client_socket =
           accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
       if (client_socket < 0) {
