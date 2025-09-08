@@ -206,8 +206,12 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
     /* Store rank 0's own QP info */
     rank_infos[0] = *left_local_info;  /* rank 0's left QP info */
     
-    /* Track which ranks have connected */
+    /* Track which ranks have connected and store their sockets */
     bool *connected_ranks = calloc(world_size, sizeof(bool));
+    int *client_sockets = malloc(world_size * sizeof(int));
+    for (int i = 0; i < world_size; i++) {
+      client_sockets[i] = -1;
+    }
     connected_ranks[0] = true; /* rank 0 is always "connected" */
     int connected_count = 1;
 
@@ -284,12 +288,12 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
           continue;
         }
         
-        /* Store the QP info */
+        /* Store the QP info and keep socket open */
         rank_infos[client_rank] = received_info;
         connected_ranks[client_rank] = true;
+        client_sockets[client_rank] = client_socket; /* Keep socket open for sending neighbor info */
         connected_count++;
         
-        close(client_socket);
         printf("[Process 0] DEBUG: Successfully processed rank %d (%d/%d connected)\n", 
                client_rank, connected_count, world_size);
       }
@@ -301,13 +305,16 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
     if (connected_count < world_size) {
       fprintf(stderr, "Bootstrap failed - only %d/%d ranks connected\n", connected_count, world_size);
       free(rank_infos);
+      free(client_sockets);
       return PG_ERROR;
     }
 
     printf("[Process 0] DEBUG: All ranks connected, distributing neighbor info\n");
 
-    /* Distribute neighbor info to each rank */
+    /* Distribute neighbor info to each rank using existing connections */
     for (int target_rank = 1; target_rank < world_size; target_rank++) {
+      if (client_sockets[target_rank] < 0) continue;
+      
       /* Calculate neighbors for target rank */
       int left_neighbor = (target_rank - 1 + world_size) % world_size;
       int right_neighbor = (target_rank + 1) % world_size;
@@ -319,23 +326,16 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
       printf("[Process 0] DEBUG: Sending to rank %d: left_neighbor=%d, right_neighbor=%d\n", 
              target_rank, left_neighbor, right_neighbor);
       
-      /* Connect to target rank and send neighbor info */
-      int result = pgnet_establish_tcp_connection(process_group->hostname_list[target_rank], PG_DEFAULT_PORT, 0);
-      if (result < 0) {
-        fprintf(stderr, "Failed to connect to rank %d\n", target_rank);
-        free(rank_infos);
-        return PG_ERROR;
+      /* Send neighbor info on existing connection */
+      if (send(client_sockets[target_rank], &left_neighbor_info, sizeof(left_neighbor_info), 0) != sizeof(left_neighbor_info) ||
+          send(client_sockets[target_rank], &right_neighbor_info, sizeof(right_neighbor_info), 0) != sizeof(right_neighbor_info)) {
+        fprintf(stderr, "Failed to send neighbor info to rank %d\n", target_rank);
+        close(client_sockets[target_rank]);
+        continue;
       }
       
-      /* Send neighbor info */
-      if (send(result, &left_neighbor_info, sizeof(left_neighbor_info), 0) != sizeof(left_neighbor_info) ||
-          send(result, &right_neighbor_info, sizeof(right_neighbor_info), 0) != sizeof(right_neighbor_info)) {
-        fprintf(stderr, "Failed to send neighbor info to rank %d\n", target_rank);
-        close(result);
-        free(rank_infos);
-        return PG_ERROR;
-      }
-      close(result);
+      printf("[Process 0] DEBUG: Successfully sent neighbor info to rank %d\n", target_rank);
+      close(client_sockets[target_rank]);
     }
 
     /* Set up rank 0's own neighbor info */
@@ -349,6 +349,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
            left_neighbor, right_neighbor);
 
     free(rank_infos);
+    free(client_sockets);
     return PG_SUCCESS;
 }
 
