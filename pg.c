@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -216,9 +217,17 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       timeout.tv_usec = 0;
       
       int select_result = select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
+      printf("[Process 0] DEBUG: select() returned %d\n", select_result);
       if (select_result <= 0) {
+        if (select_result == 0) {
+          printf("[Process 0] DEBUG: select() timeout, continuing...\n");
+        } else {
+          printf("[Process 0] DEBUG: select() error: %s\n", strerror(errno));
+        }
         continue; // Try again until total timeout
       }
+      
+      printf("[Process 0] DEBUG: select() indicates connection ready, calling accept()...\n");
       
       int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
       if (client_socket < 0) {
