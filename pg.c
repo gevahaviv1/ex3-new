@@ -195,16 +195,20 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
 
     printf("[Process 0] DEBUG: Server listening on port %d\n", PG_DEFAULT_PORT);
 
-    /* Store QP info for all ranks */
-    rdma_qp_bootstrap_info_t *rank_infos = malloc(world_size * sizeof(rdma_qp_bootstrap_info_t));
-    if (!rank_infos) {
+    /* Store QP info for all ranks - need both left and right QPs */
+    rdma_qp_bootstrap_info_t *left_qp_infos = malloc(world_size * sizeof(rdma_qp_bootstrap_info_t));
+    rdma_qp_bootstrap_info_t *right_qp_infos = malloc(world_size * sizeof(rdma_qp_bootstrap_info_t));
+    if (!left_qp_infos || !right_qp_infos) {
       fprintf(stderr, "Failed to allocate memory for rank infos\n");
       close(server_socket);
+      free(left_qp_infos);
+      free(right_qp_infos);
       return PG_ERROR;
     }
 
     /* Store rank 0's own QP info */
-    rank_infos[0] = *left_local_info;  /* rank 0's left QP info */
+    left_qp_infos[0] = *left_local_info;
+    right_qp_infos[0] = *right_local_info;
     
     /* Track which ranks have connected and store their sockets */
     bool *connected_ranks = calloc(world_size, sizeof(bool));
@@ -264,7 +268,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
         
         printf("[Process 0] DEBUG: Accepted connection, receiving data...\n");
         
-        /* Receive rank first, then QP info from the client */
+        /* Receive rank first, then both QP infos from the client */
         int client_rank;
         if (recv(client_socket, &client_rank, sizeof(client_rank), 0) != sizeof(client_rank)) {
           fprintf(stderr, "Failed to receive rank from client\n");
@@ -272,9 +276,9 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
           continue;
         }
         
-        rdma_qp_bootstrap_info_t received_info;
-        ssize_t bytes_received = recv(client_socket, &received_info, sizeof(received_info), 0);
-        if (bytes_received != sizeof(received_info)) {
+        rdma_qp_bootstrap_info_t left_qp_info, right_qp_info;
+        if (recv(client_socket, &left_qp_info, sizeof(left_qp_info), 0) != sizeof(left_qp_info) ||
+            recv(client_socket, &right_qp_info, sizeof(right_qp_info), 0) != sizeof(right_qp_info)) {
           fprintf(stderr, "Failed to receive complete QP info from client\n");
           close(client_socket);
           continue;
@@ -288,8 +292,9 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
           continue;
         }
         
-        /* Store the QP info and keep socket open */
-        rank_infos[client_rank] = received_info;
+        /* Store both QP infos and keep socket open */
+        left_qp_infos[client_rank] = left_qp_info;
+        right_qp_infos[client_rank] = right_qp_info;
         connected_ranks[client_rank] = true;
         client_sockets[client_rank] = client_socket; /* Keep socket open for sending neighbor info */
         connected_count++;
@@ -304,7 +309,8 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
 
     if (connected_count < world_size) {
       fprintf(stderr, "Bootstrap failed - only %d/%d ranks connected\n", connected_count, world_size);
-      free(rank_infos);
+      free(left_qp_infos);
+      free(right_qp_infos);
       free(client_sockets);
       return PG_ERROR;
     }
@@ -319,16 +325,19 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
       int left_neighbor = (target_rank - 1 + world_size) % world_size;
       int right_neighbor = (target_rank + 1) % world_size;
       
-      /* Prepare neighbor info to send */
-      rdma_qp_bootstrap_info_t left_neighbor_info = rank_infos[left_neighbor];
-      rdma_qp_bootstrap_info_t right_neighbor_info = rank_infos[right_neighbor];
+      /* For ring topology, target_rank needs to connect:
+       * - its left_neighbor_qp to left_neighbor's right_neighbor_qp (to receive from left)
+       * - its right_neighbor_qp to right_neighbor's left_neighbor_qp (to send to right)
+       */
+      rdma_qp_bootstrap_info_t left_remote_qp = right_qp_infos[left_neighbor];  /* left neighbor's right QP */
+      rdma_qp_bootstrap_info_t right_remote_qp = left_qp_infos[right_neighbor]; /* right neighbor's left QP */
       
-      printf("[Process 0] DEBUG: Sending to rank %d: left_neighbor=%d, right_neighbor=%d\n", 
+      printf("[Process 0] DEBUG: Sending to rank %d: left_neighbor=%d (right_qp), right_neighbor=%d (left_qp)\n", 
              target_rank, left_neighbor, right_neighbor);
       
-      /* Send neighbor info on existing connection */
-      if (send(client_sockets[target_rank], &left_neighbor_info, sizeof(left_neighbor_info), 0) != sizeof(left_neighbor_info) ||
-          send(client_sockets[target_rank], &right_neighbor_info, sizeof(right_neighbor_info), 0) != sizeof(right_neighbor_info)) {
+      /* Send the correct remote QP info */
+      if (send(client_sockets[target_rank], &left_remote_qp, sizeof(left_remote_qp), 0) != sizeof(left_remote_qp) ||
+          send(client_sockets[target_rank], &right_remote_qp, sizeof(right_remote_qp), 0) != sizeof(right_remote_qp)) {
         fprintf(stderr, "Failed to send neighbor info to rank %d\n", target_rank);
         close(client_sockets[target_rank]);
         continue;
@@ -342,13 +351,15 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
     int left_neighbor = (world_size - 1) % world_size;  /* rank 3 for 4 processes */
     int right_neighbor = 1 % world_size;                /* rank 1 for 4 processes */
     
-    *left_remote_info = rank_infos[left_neighbor];
-    *right_remote_info = rank_infos[right_neighbor];
+    /* Rank 0 connects: left_qp to rank 3's right_qp, right_qp to rank 1's left_qp */
+    *left_remote_info = right_qp_infos[left_neighbor];   /* rank 3's right QP */
+    *right_remote_info = left_qp_infos[right_neighbor];  /* rank 1's left QP */
     
     printf("[Process 0] DEBUG: My neighbors - left: rank %d, right: rank %d\n", 
            left_neighbor, right_neighbor);
 
-    free(rank_infos);
+    free(left_qp_infos);
+    free(right_qp_infos);
     free(client_sockets);
     return PG_SUCCESS;
 }
@@ -373,16 +384,17 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
       return PG_ERROR;
     }
 
-    /* Send our rank first, then QP info to rank 0 */
+    /* Send our rank first, then both QP infos to rank 0 */
     if (send(client_socket, &rank, sizeof(rank), 0) != sizeof(rank) ||
-        send(client_socket, left_local_info, sizeof(*left_local_info), 0) != sizeof(*left_local_info)) {
+        send(client_socket, left_local_info, sizeof(*left_local_info), 0) != sizeof(*left_local_info) ||
+        send(client_socket, right_local_info, sizeof(*right_local_info), 0) != sizeof(*right_local_info)) {
       fprintf(stderr, "Failed to send rank and QP info to rank 0\n");
       close(client_socket);
       return PG_ERROR;
     }
 
-    printf("[Process %d] DEBUG: Sent QP info to rank 0: qp=%u, lid=%u\n",
-           rank, left_local_info->queue_pair_number, left_local_info->local_identifier);
+    printf("[Process %d] DEBUG: Sent QP info to rank 0: left_qp=%u, right_qp=%u\n",
+           rank, left_local_info->queue_pair_number, right_local_info->queue_pair_number);
 
     /* Receive neighbor info from rank 0 */
     if (recv(client_socket, left_remote_info, sizeof(*left_remote_info), 0) != sizeof(*left_remote_info) ||
