@@ -3,8 +3,10 @@
 #include "pg.h"
 
 #include <arpa/inet.h>
-#include <math.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,12 +194,17 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     for (int i = 0; i < world_size; i++) client_sockets[i] = -1;
     
     int connected_ranks = 1; // Count rank 0
+    bool *rank_connected = calloc(world_size, sizeof(bool));
+    rank_connected[0] = true; // rank 0 is always connected
     
-    for (int i = 1; i < world_size; i++) {
+    time_t start_time = time(NULL);
+    const int TOTAL_TIMEOUT = 30; // 30 seconds total timeout
+    
+    while (connected_ranks < world_size && (time(NULL) - start_time) < TOTAL_TIMEOUT) {
       struct sockaddr_in client_addr;
       socklen_t addr_len = sizeof(client_addr);
       
-      printf("[Process 0] DEBUG: Waiting for rank %d to connect...\n", i);
+      printf("[Process 0] DEBUG: Waiting for any rank to connect (%d/%d connected)...\n", connected_ranks, world_size);
       
       /* Use select() for accept timeout */
       fd_set read_fds;
@@ -205,22 +212,20 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       FD_SET(server_socket, &read_fds);
       
       struct timeval timeout;
-      timeout.tv_sec = 8;  // 8 second timeout
+      timeout.tv_sec = 5;  // 5 second timeout per iteration
       timeout.tv_usec = 0;
       
       int select_result = select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
       if (select_result <= 0) {
-        printf("[Process 0] DEBUG: Timeout waiting for rank %d - proceeding with %d ranks\n", i, connected_ranks);
-        break; // Stop waiting for more ranks
+        continue; // Try again until total timeout
       }
       
       int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
       if (client_socket < 0) {
-        printf("[Process 0] DEBUG: Accept failed for rank %d - proceeding with %d ranks\n", i, connected_ranks);
-        break;
+        continue; // Try again
       }
 
-      printf("[Process 0] DEBUG: Accepted connection from rank %d, receiving data...\n", i);
+      printf("[Process 0] DEBUG: Accepted connection, receiving data...\n");
 
       /* Remove timeout for data reception */
       struct timeval no_timeout = {0, 0};
@@ -252,16 +257,25 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
         continue;
       }
 
+      if (rank_connected[client_rank]) {
+        printf("[Process 0] DEBUG: Rank %d already connected, ignoring duplicate\n", client_rank);
+        close(client_socket);
+        continue;
+      }
+
       rank_infos[client_rank].qp_left = client_left.queue_pair_number;
       rank_infos[client_rank].qp_right = client_right.queue_pair_number;
       rank_infos[client_rank].lid = client_left.local_identifier;
       client_sockets[client_rank] = client_socket;
+      rank_connected[client_rank] = true;
       connected_ranks++;
 
-      printf("[Process 0] DEBUG: Collected from rank %d: left_qp=%u, right_qp=%u, lid=%u\n",
-             client_rank, client_left.queue_pair_number, client_right.queue_pair_number, client_left.local_identifier);
+      printf("[Process 0] DEBUG: Collected from rank %d: left_qp=%u, right_qp=%u, lid=%u (%d/%d connected)\n",
+             client_rank, client_left.queue_pair_number, client_right.queue_pair_number, client_left.local_identifier,
+             connected_ranks, world_size);
     }
 
+    free(rank_connected);
     printf("[Process 0] DEBUG: Phase 1 complete - collected info from %d ranks\n", connected_ranks);
 
     printf("[Process 0] DEBUG: Phase 2 - Sending neighbor info to all ranks\n");
