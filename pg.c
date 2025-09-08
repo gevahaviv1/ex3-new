@@ -161,12 +161,39 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     /* Rank 0: Act as centralized server */
     printf("[Process 0] DEBUG: Acting as bootstrap server\n");
 
-    int server_socket =
-        pgnet_establish_tcp_connection(NULL, PG_DEFAULT_PORT, 1);
+    /* Create server socket directly instead of using pgnet_establish_tcp_connection */
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
-      fprintf(stderr, "Failed to create bootstrap server socket\n");
+      perror("Failed to create server socket");
       return PG_ERROR;
     }
+    
+    /* Enable address reuse */
+    int socket_option = 1;
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &socket_option, sizeof(socket_option));
+    
+    /* Configure server address */
+    struct sockaddr_in server_address;
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = INADDR_ANY;
+    server_address.sin_port = htons(PG_DEFAULT_PORT);
+    
+    /* Bind to the specified port */
+    if (bind(server_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
+      perror("Failed to bind server socket");
+      close(server_socket);
+      return PG_ERROR;
+    }
+    
+    /* Listen for incoming connections */
+    if (listen(server_socket, 10) < 0) {
+      perror("Failed to listen on server socket");
+      close(server_socket);
+      return PG_ERROR;
+    }
+    
+    fprintf(stderr, "[TCP] server listening on %d\n", PG_DEFAULT_PORT);
 
     /* Collect QP info from all ranks (including self) */
     typedef struct {
