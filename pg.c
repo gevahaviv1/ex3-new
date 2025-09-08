@@ -193,9 +193,9 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     
     int connected_ranks = 1; // Count rank 0
     
-    /* Set socket timeout to detect missing ranks */
+    /* Set socket timeout for accept calls */
     struct timeval timeout;
-    timeout.tv_sec = 5;  // 5 second timeout
+    timeout.tv_sec = 8;  // 8 second timeout to allow for startup delays
     timeout.tv_usec = 0;
     setsockopt(server_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     
@@ -203,24 +203,36 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       struct sockaddr_in client_addr;
       socklen_t addr_len = sizeof(client_addr);
       
+      printf("[Process 0] DEBUG: Waiting for rank %d to connect...\n", i);
+      
       int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
       if (client_socket < 0) {
-        printf("[Process 0] DEBUG: Timeout waiting for more ranks - proceeding with %d ranks\n", connected_ranks);
+        printf("[Process 0] DEBUG: Timeout waiting for rank %d - proceeding with %d ranks\n", i, connected_ranks);
         break; // Stop waiting for more ranks
       }
 
-      printf("[Process 0] DEBUG: Accepted connection from client, receiving data...\n");
+      printf("[Process 0] DEBUG: Accepted connection from rank %d, receiving data...\n", i);
+
+      /* Remove timeout for data reception */
+      struct timeval no_timeout = {0, 0};
+      setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &no_timeout, sizeof(no_timeout));
 
       /* Receive rank ID and QP info */
       int client_rank;
       rdma_qp_bootstrap_info_t client_left, client_right;
       
       ssize_t recv1 = recv(client_socket, &client_rank, sizeof(client_rank), 0);
+      printf("[Process 0] DEBUG: recv1 returned %zd bytes\n", recv1);
+      
       ssize_t recv2 = recv(client_socket, &client_left, sizeof(client_left), 0);
+      printf("[Process 0] DEBUG: recv2 returned %zd bytes\n", recv2);
+      
       ssize_t recv3 = recv(client_socket, &client_right, sizeof(client_right), 0);
+      printf("[Process 0] DEBUG: recv3 returned %zd bytes\n", recv3);
       
       if (recv1 != sizeof(client_rank) || recv2 != sizeof(client_left) || recv3 != sizeof(client_right)) {
-        fprintf(stderr, "Failed to receive client info: recv1=%zd, recv2=%zd, recv3=%zd\n", recv1, recv2, recv3);
+        fprintf(stderr, "Failed to receive client info: recv1=%zd, recv2=%zd, recv3=%zd (expected %zu, %zu, %zu)\n", 
+                recv1, recv2, recv3, sizeof(client_rank), sizeof(client_left), sizeof(client_right));
         close(client_socket);
         continue;
       }
