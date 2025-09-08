@@ -267,11 +267,18 @@ int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair,
         .max_dest_rd_atomic = RDMA_DEFAULT_MAX_RD_ATOMIC,
         .min_rnr_timer = RDMA_DEFAULT_MIN_RNR_TIMER,
         .ah_attr = {
-            .is_global = 0,  /* Use local routing */
+            .is_global = 1,  /* Use global routing for multi-host connections */
             .dlid = remote_qp_info->local_identifier,
             .sl = 0,         /* Service level */
             .src_path_bits = 0,
-            .port_num = ib_port_num
+            .port_num = ib_port_num,
+            .grh = {
+                .dgid = remote_qp_info->global_identifier,
+                .flow_label = 0,
+                .sgid_index = 0,
+                .hop_limit = 0xFF,
+                .traffic_class = 0
+            }
         }
     };
     
