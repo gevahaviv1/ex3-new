@@ -3,16 +3,14 @@
 #include "pg.h"
 
 #include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <time.h>
-#include <stdbool.h>
 #include <errno.h>
+#include <netinet/in.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "RDMA_api.h"
@@ -190,33 +188,38 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
            rank_infos[0].qp_left, rank_infos[0].qp_right, rank_infos[0].lid);
 
     printf("[Process 0] DEBUG: Phase 1 - Collecting QP info from all ranks\n");
-    
+
     int *client_sockets = calloc(world_size, sizeof(int));
     for (int i = 0; i < world_size; i++) client_sockets[i] = -1;
-    
-    int connected_ranks = 1; // Count rank 0
+
+    int connected_ranks = 1;  // Count rank 0
     bool *rank_connected = calloc(world_size, sizeof(bool));
-    rank_connected[0] = true; // rank 0 is always connected
-    
+    rank_connected[0] = true;  // rank 0 is always connected
+
     time_t start_time = time(NULL);
-    const int TOTAL_TIMEOUT = 30; // 30 seconds total timeout
-    
-    while (connected_ranks < world_size && (time(NULL) - start_time) < TOTAL_TIMEOUT) {
+    const int TOTAL_TIMEOUT = 30;  // 30 seconds total timeout
+
+    while (connected_ranks < world_size &&
+           (time(NULL) - start_time) < TOTAL_TIMEOUT) {
       struct sockaddr_in client_addr;
       socklen_t addr_len = sizeof(client_addr);
-      
-      printf("[Process 0] DEBUG: Waiting for any rank to connect (%d/%d connected)...\n", connected_ranks, world_size);
-      
+
+      printf(
+          "[Process 0] DEBUG: Waiting for any rank to connect (%d/%d "
+          "connected)...\n",
+          connected_ranks, world_size);
+
       /* Use select() for accept timeout */
       fd_set read_fds;
       FD_ZERO(&read_fds);
       FD_SET(server_socket, &read_fds);
-      
+
       struct timeval timeout;
       timeout.tv_sec = 5;  // 5 second timeout per iteration
       timeout.tv_usec = 0;
-      
-      int select_result = select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
+
+      int select_result =
+          select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
       printf("[Process 0] DEBUG: select() returned %d\n", select_result);
       if (select_result <= 0) {
         if (select_result == 0) {
@@ -224,38 +227,48 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
         } else {
           printf("[Process 0] DEBUG: select() error: %s\n", strerror(errno));
         }
-        continue; // Try again until total timeout
+        continue;  // Try again until total timeout
       }
-      
-      printf("[Process 0] DEBUG: select() indicates connection ready, calling accept()...\n");
-      
-      int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
+
+      printf(
+          "[Process 0] DEBUG: select() indicates connection ready, calling "
+          "accept()...\n");
+
+      int client_socket =
+          accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
       if (client_socket < 0) {
-        continue; // Try again
+        printf("[Process 0] DEBUG: accept() failed: %s\n", strerror(errno));
+        continue;  // Try again
       }
 
       printf("[Process 0] DEBUG: Accepted connection, receiving data...\n");
 
       /* Remove timeout for data reception */
       struct timeval no_timeout = {0, 0};
-      setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &no_timeout, sizeof(no_timeout));
+      setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &no_timeout,
+                 sizeof(no_timeout));
 
       /* Receive rank ID and QP info */
       int client_rank;
       rdma_qp_bootstrap_info_t client_left, client_right;
-      
+
       ssize_t recv1 = recv(client_socket, &client_rank, sizeof(client_rank), 0);
       printf("[Process 0] DEBUG: recv1 returned %zd bytes\n", recv1);
-      
+
       ssize_t recv2 = recv(client_socket, &client_left, sizeof(client_left), 0);
       printf("[Process 0] DEBUG: recv2 returned %zd bytes\n", recv2);
-      
-      ssize_t recv3 = recv(client_socket, &client_right, sizeof(client_right), 0);
+
+      ssize_t recv3 =
+          recv(client_socket, &client_right, sizeof(client_right), 0);
       printf("[Process 0] DEBUG: recv3 returned %zd bytes\n", recv3);
-      
-      if (recv1 != sizeof(client_rank) || recv2 != sizeof(client_left) || recv3 != sizeof(client_right)) {
-        fprintf(stderr, "Failed to receive client info: recv1=%zd, recv2=%zd, recv3=%zd (expected %zu, %zu, %zu)\n", 
-                recv1, recv2, recv3, sizeof(client_rank), sizeof(client_left), sizeof(client_right));
+
+      if (recv1 != sizeof(client_rank) || recv2 != sizeof(client_left) ||
+          recv3 != sizeof(client_right)) {
+        fprintf(stderr,
+                "Failed to receive client info: recv1=%zd, recv2=%zd, "
+                "recv3=%zd (expected %zu, %zu, %zu)\n",
+                recv1, recv2, recv3, sizeof(client_rank), sizeof(client_left),
+                sizeof(client_right));
         close(client_socket);
         continue;
       }
@@ -267,7 +280,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       }
 
       if (rank_connected[client_rank]) {
-        printf("[Process 0] DEBUG: Rank %d already connected, ignoring duplicate\n", client_rank);
+        printf(
+            "[Process 0] DEBUG: Rank %d already connected, ignoring "
+            "duplicate\n",
+            client_rank);
         close(client_socket);
         continue;
       }
@@ -279,19 +295,24 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       rank_connected[client_rank] = true;
       connected_ranks++;
 
-      printf("[Process 0] DEBUG: Collected from rank %d: left_qp=%u, right_qp=%u, lid=%u (%d/%d connected)\n",
-             client_rank, client_left.queue_pair_number, client_right.queue_pair_number, client_left.local_identifier,
-             connected_ranks, world_size);
+      printf(
+          "[Process 0] DEBUG: Collected from rank %d: left_qp=%u, right_qp=%u, "
+          "lid=%u (%d/%d connected)\n",
+          client_rank, client_left.queue_pair_number,
+          client_right.queue_pair_number, client_left.local_identifier,
+          connected_ranks, world_size);
     }
 
     free(rank_connected);
-    printf("[Process 0] DEBUG: Phase 1 complete - collected info from %d ranks\n", connected_ranks);
+    printf(
+        "[Process 0] DEBUG: Phase 1 complete - collected info from %d ranks\n",
+        connected_ranks);
 
     printf("[Process 0] DEBUG: Phase 2 - Sending neighbor info to all ranks\n");
-    
+
     for (int rank = 1; rank < world_size; rank++) {
       if (client_sockets[rank] < 0) continue;
-      
+
       int left_neighbor = (rank - 1 + connected_ranks) % connected_ranks;
       int right_neighbor = (rank + 1) % connected_ranks;
 
@@ -301,17 +322,22 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
       right_remote.queue_pair_number = rank_infos[right_neighbor].qp_right;
       right_remote.local_identifier = rank_infos[right_neighbor].lid;
 
-      if (send(client_sockets[rank], &left_remote, sizeof(left_remote), 0) != sizeof(left_remote) ||
-          send(client_sockets[rank], &right_remote, sizeof(right_remote), 0) != sizeof(right_remote)) {
+      if (send(client_sockets[rank], &left_remote, sizeof(left_remote), 0) !=
+              sizeof(left_remote) ||
+          send(client_sockets[rank], &right_remote, sizeof(right_remote), 0) !=
+              sizeof(right_remote)) {
         fprintf(stderr, "Failed to send neighbor info to rank %d\n", rank);
       } else {
-        printf("[Process 0] DEBUG: Sent to rank %d: left_remote_qp=%u, right_remote_qp=%u\n",
-               rank, left_remote.queue_pair_number, right_remote.queue_pair_number);
+        printf(
+            "[Process 0] DEBUG: Sent to rank %d: left_remote_qp=%u, "
+            "right_remote_qp=%u\n",
+            rank, left_remote.queue_pair_number,
+            right_remote.queue_pair_number);
       }
 
       close(client_sockets[rank]);
     }
-    
+
     free(client_sockets);
 
     /* Set up rank 0's own neighbor info based on connected ranks */
