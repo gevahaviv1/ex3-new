@@ -236,10 +236,12 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
       /* Initialize addr_len before each accept() call */
       addr_len = sizeof(client_addr);
+      printf("[Process 0] DEBUG: About to call accept() with server_socket=%d, addr_len=%zu\n", server_socket, addr_len);
       int client_socket =
           accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
       if (client_socket < 0) {
-        printf("[Process 0] DEBUG: accept() failed: %s\n", strerror(errno));
+        printf("[Process 0] DEBUG: accept() failed: %s (errno=%d)\n", strerror(errno), errno);
+        printf("[Process 0] DEBUG: server_socket=%d, addr_len after accept=%zu\n", server_socket, addr_len);
         continue;  // Try again
       }
 
