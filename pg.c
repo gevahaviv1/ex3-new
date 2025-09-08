@@ -153,6 +153,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
                                   rdma_qp_bootstrap_info_t *right_local_info,
                                   rdma_qp_bootstrap_info_t *left_remote_info,
                                   rdma_qp_bootstrap_info_t *right_remote_info) {
+    (void)right_local_info; /* Unused in current implementation */
     int world_size = process_group->process_group_size;
     
     printf("[Process 0] DEBUG: Acting as bootstrap server\n");
@@ -359,6 +360,7 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
                                   rdma_qp_bootstrap_info_t *right_local_info,
                                   rdma_qp_bootstrap_info_t *left_remote_info,
                                   rdma_qp_bootstrap_info_t *right_remote_info) {
+    (void)right_local_info; /* Unused in current implementation */
     int rank = process_group->process_rank;
     
     printf("[Process %d] DEBUG: Connecting to rank 0 for bootstrap\n", rank);
