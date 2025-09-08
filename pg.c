@@ -144,60 +144,6 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
                                   rdma_qp_bootstrap_info_t *left_remote_info,
                                   rdma_qp_bootstrap_info_t *right_remote_info);
 
-static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
-  /* Skip self-connections for single-process groups */
-  if (process_group->process_group_size == 1) {
-    return PG_SUCCESS;
-  }
-
-  int rank = process_group->process_rank;
-  printf("[Process %d] DEBUG: Starting centralized bootstrap (rank 0 server approach)\n", rank);
-
-  /* Extract local QP info */
-  rdma_qp_bootstrap_info_t left_local_info, right_local_info;
-  rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->left_neighbor_qp, &left_local_info);
-  rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->right_neighbor_qp, &right_local_info);
-
-  rdma_qp_bootstrap_info_t left_remote_info, right_remote_info;
-
-  /* Delegate to appropriate phase based on rank */
-  int result;
-  if (rank == 0) {
-    result = bootstrap_server_phase(process_group, &left_local_info, &right_local_info,
-                                    &left_remote_info, &right_remote_info);
-  } else {
-    result = bootstrap_client_phase(process_group, &left_local_info, &right_local_info,
-                                    &left_remote_info, &right_remote_info);
-  }
-
-  if (result != PG_SUCCESS) {
-    return result;
-  }
-
-  /* Transition queue pairs to connected state */
-  printf("[Process %d] DEBUG: Transitioning queue pairs to RTR state...\n", rank);
-  if (rdma_transition_qp_to_rtr(&process_group->rdma_context, 
-                                process_group->left_neighbor_qp, &left_remote_info) != PG_SUCCESS ||
-      rdma_transition_qp_to_rtr(&process_group->rdma_context, 
-                                process_group->right_neighbor_qp, &right_remote_info) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to transition queue pairs to RTR state\n");
-    return PG_ERROR;
-  }
-
-  printf("[Process %d] DEBUG: Transitioning queue pairs to RTS state...\n", rank);
-  if (rdma_transition_qp_to_rts(&process_group->rdma_context, 
-                                process_group->left_neighbor_qp) != PG_SUCCESS ||
-      rdma_transition_qp_to_rts(&process_group->rdma_context, 
-                                process_group->right_neighbor_qp) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to transition queue pairs to RTS state\n");
-    return PG_ERROR;
-  }
-
-  printf("[Process %d] DEBUG: Bootstrap complete - all queue pairs connected\n", rank);
-  return PG_SUCCESS;
-}
 
 /**
  * Bootstrap server phase - rank 0 collects QP info from all ranks
@@ -313,7 +259,14 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
         
         printf("[Process 0] DEBUG: Accepted connection, receiving data...\n");
         
-        /* Receive QP info from the client */
+        /* Receive rank first, then QP info from the client */
+        int client_rank;
+        if (recv(client_socket, &client_rank, sizeof(client_rank), 0) != sizeof(client_rank)) {
+          fprintf(stderr, "Failed to receive rank from client\n");
+          close(client_socket);
+          continue;
+        }
+        
         rdma_qp_bootstrap_info_t received_info;
         ssize_t bytes_received = recv(client_socket, &received_info, sizeof(received_info), 0);
         if (bytes_received != sizeof(received_info)) {
@@ -321,8 +274,6 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
           close(client_socket);
           continue;
         }
-        
-        int client_rank = received_info.process_rank;
         printf("[Process 0] DEBUG: Received QP info from rank %d\n", client_rank);
         
         /* Validate rank and avoid duplicates */
@@ -368,12 +319,22 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
              target_rank, left_neighbor, right_neighbor);
       
       /* Connect to target rank and send neighbor info */
-      int result = pgnet_establish_tcp_connection(target_rank, &left_neighbor_info, &right_neighbor_info);
+      int result = pgnet_establish_tcp_connection(process_group->hostname_list[target_rank], PG_DEFAULT_PORT, 0);
       if (result < 0) {
-        fprintf(stderr, "Failed to send neighbor info to rank %d\n", target_rank);
+        fprintf(stderr, "Failed to connect to rank %d\n", target_rank);
         free(rank_infos);
         return PG_ERROR;
       }
+      
+      /* Send neighbor info */
+      if (send(result, &left_neighbor_info, sizeof(left_neighbor_info), 0) != sizeof(left_neighbor_info) ||
+          send(result, &right_neighbor_info, sizeof(right_neighbor_info), 0) != sizeof(right_neighbor_info)) {
+        fprintf(stderr, "Failed to send neighbor info to rank %d\n", target_rank);
+        close(result);
+        free(rank_infos);
+        return PG_ERROR;
+      }
+      close(result);
     }
 
     /* Set up rank 0's own neighbor info */
@@ -409,9 +370,10 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
       return PG_ERROR;
     }
 
-    /* Send our QP info to rank 0 */
-    if (send(client_socket, left_local_info, sizeof(*left_local_info), 0) != sizeof(*left_local_info)) {
-      fprintf(stderr, "Failed to send QP info to rank 0\n");
+    /* Send our rank first, then QP info to rank 0 */
+    if (send(client_socket, &rank, sizeof(rank), 0) != sizeof(rank) ||
+        send(client_socket, left_local_info, sizeof(*left_local_info), 0) != sizeof(*left_local_info)) {
+      fprintf(stderr, "Failed to send rank and QP info to rank 0\n");
       close(client_socket);
       return PG_ERROR;
     }
@@ -444,15 +406,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   rdma_qp_bootstrap_info_t left_remote_info, right_remote_info;
 
   /* Extract local QP information */
-  if (rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                     process_group->left_neighbor_qp,
-                                     &left_local_info) != PG_SUCCESS ||
-      rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                     process_group->right_neighbor_qp,
-                                     &right_local_info) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to extract QP bootstrap info\n");
-    return PG_ERROR;
-  }
+  rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
+                                 process_group->left_neighbor_qp, &left_local_info);
+  rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
+                                 process_group->right_neighbor_qp, &right_local_info);
 
   /* Bootstrap phase - exchange QP info */
   int result;
@@ -472,12 +429,12 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   /* Transition queue pairs to RTR state */
   printf("[Process %d] DEBUG: Transitioning queue pairs to RTR state...\n", rank);
 
-  if (rdma_transition_qp_to_rtr(&process_group->rdma_context,
-                                process_group->left_neighbor_qp,
-                                &left_remote_info) != PG_SUCCESS ||
-      rdma_transition_qp_to_rtr(&process_group->rdma_context,
-                                process_group->right_neighbor_qp,
-                                &right_remote_info) != PG_SUCCESS) {
+  if (rdma_transition_qp_to_rtr(process_group->left_neighbor_qp,
+                                &left_remote_info,
+                                process_group->rdma_context.ib_port_number) != PG_SUCCESS ||
+      rdma_transition_qp_to_rtr(process_group->right_neighbor_qp,
+                                &right_remote_info,
+                                process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
     fprintf(stderr, "Failed to transition queue pairs to RTR state\n");
     return PG_ERROR;
   }
@@ -487,20 +444,10 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
          rank);
 
   if (rdma_transition_qp_to_rts(process_group->left_neighbor_qp,
-                                left_local_info.packet_sequence_number) !=
-      PG_SUCCESS) {
-    fprintf(stderr,
-            "[Process %d] ERROR: Failed to transition left QP to RTS state\n",
-            rank);
-    return PG_ERROR;
-  }
-
-  if (rdma_transition_qp_to_rts(process_group->right_neighbor_qp,
-                                right_local_info.packet_sequence_number) !=
-      PG_SUCCESS) {
-    fprintf(stderr,
-            "[Process %d] ERROR: Failed to transition right QP to RTS state\n",
-            rank);
+                                left_local_info.packet_sequence_number) != PG_SUCCESS ||
+      rdma_transition_qp_to_rts(process_group->right_neighbor_qp,
+                                right_local_info.packet_sequence_number) != PG_SUCCESS) {
+    fprintf(stderr, "Failed to transition queue pairs to RTS state\n");
     return PG_ERROR;
   }
 
