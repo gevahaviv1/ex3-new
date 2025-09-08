@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "RDMA_api.h"
 #include "constants.h"
 #include <stdio.h>

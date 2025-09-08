@@ -193,22 +193,31 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     
     int connected_ranks = 1; // Count rank 0
     
-    /* Set socket timeout for accept calls */
-    struct timeval timeout;
-    timeout.tv_sec = 8;  // 8 second timeout to allow for startup delays
-    timeout.tv_usec = 0;
-    setsockopt(server_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    
     for (int i = 1; i < world_size; i++) {
       struct sockaddr_in client_addr;
       socklen_t addr_len = sizeof(client_addr);
       
       printf("[Process 0] DEBUG: Waiting for rank %d to connect...\n", i);
       
-      int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
-      if (client_socket < 0) {
+      /* Use select() for accept timeout */
+      fd_set read_fds;
+      FD_ZERO(&read_fds);
+      FD_SET(server_socket, &read_fds);
+      
+      struct timeval timeout;
+      timeout.tv_sec = 8;  // 8 second timeout
+      timeout.tv_usec = 0;
+      
+      int select_result = select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
+      if (select_result <= 0) {
         printf("[Process 0] DEBUG: Timeout waiting for rank %d - proceeding with %d ranks\n", i, connected_ranks);
         break; // Stop waiting for more ranks
+      }
+      
+      int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
+      if (client_socket < 0) {
+        printf("[Process 0] DEBUG: Accept failed for rank %d - proceeding with %d ranks\n", i, connected_ranks);
+        break;
       }
 
       printf("[Process 0] DEBUG: Accepted connection from rank %d, receiving data...\n", i);
