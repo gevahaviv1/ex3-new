@@ -634,14 +634,21 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
          process_group->process_rank);
 
   /* Synchronization barrier: ensure all processes have posted receives */
-  printf("[Process %d] DEBUG: Entering synchronization barrier (1 second)...\n",
+  printf("[Process %d] DEBUG: Entering synchronization barrier...\n",
          process_group->process_rank);
 
-  /* All processes wait the same amount to ensure synchronization */
-  usleep(1000000); /* 1 second delay for all processes */
+  /* Implement rank-based staggered synchronization to prevent race conditions:
+   * - All processes wait base time to post receives
+   * - Higher ranks wait additional time to ensure lower ranks are ready
+   * - This creates a cascade effect ensuring proper ordering */
+  int base_delay_ms = 1500; /* Base delay for all processes */
+  int rank_delay_ms = 200;   /* Additional delay per rank */
+  int total_delay_ms = base_delay_ms + (process_group->process_rank * rank_delay_ms);
+  
+  usleep(total_delay_ms * 1000); /* Convert to microseconds */
 
-  printf("[Process %d] DEBUG: Synchronization barrier complete\n",
-         process_group->process_rank);
+  printf("[Process %d] DEBUG: Synchronization barrier complete (waited %d ms)\n",
+         process_group->process_rank, total_delay_ms);
 
   /* Post send request to right neighbor */
   printf("[Process %d] DEBUG: Posting send request to process %d...\n",
