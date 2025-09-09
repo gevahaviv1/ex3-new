@@ -622,11 +622,14 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
       "[Process %d] DEBUG: Will receive from process %d, send to process %d\n",
       process_group->process_rank, left_neighbor, right_neighbor);
 
+  /* Copy send data to RDMA send buffer */
+  memcpy(process_group->right_send_buffer, send_data, data_size);
+
   /* Post receive request for incoming data from left neighbor */
   printf("[Process %d] DEBUG: Posting receive request from process %d...\n",
          process_group->process_rank, left_neighbor);
 
-  if (rdma_post_receive_request(process_group->left_neighbor_qp, receive_data,
+  if (rdma_post_receive_request(process_group->left_neighbor_qp, process_group->left_receive_buffer,
                                 data_size,
                                 process_group->left_receive_mr) != PG_SUCCESS) {
     fprintf(stderr, "[Process %d] ERROR: Failed to post receive request\n",
@@ -658,7 +661,7 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
   printf("[Process %d] DEBUG: Posting send request to process %d...\n",
          process_group->process_rank, right_neighbor);
 
-  if (rdma_post_send_request(process_group->right_neighbor_qp, send_data,
+  if (rdma_post_send_request(process_group->right_neighbor_qp, process_group->right_send_buffer,
                              data_size,
                              process_group->right_send_mr) != PG_SUCCESS) {
     fprintf(stderr, "[Process %d] ERROR: Failed to post send request\n",
@@ -686,6 +689,9 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
 
   printf("[Process %d] DEBUG: Receive completed successfully\n",
          process_group->process_rank);
+
+  /* Copy received data to output buffer */
+  memcpy(receive_data, process_group->left_receive_buffer, data_size);
 
   /* Wait for send completion */
   printf("[Process %d] DEBUG: Waiting for send completion...\n",
