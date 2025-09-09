@@ -477,13 +477,40 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue,
     }
 }
 
+/* Simple completion storage for out-of-order completions */
+#define MAX_STORED_COMPLETIONS 8
+static struct ibv_wc stored_completions[MAX_STORED_COMPLETIONS];
+static int stored_count = 0;
+
 int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, 
                                      struct ibv_wc *work_completion,
                                      uint64_t expected_wr_id) {
     PG_CHECK_NULL(completion_queue, "Completion queue is NULL");
     PG_CHECK_NULL(work_completion, "Work completion pointer is NULL");
     
-    /* Keep polling until we get the specific completion we want */
+    /* First check if we already have this completion stored */
+    for (int i = 0; i < stored_count; i++) {
+        if (stored_completions[i].wr_id == expected_wr_id) {
+            /* Found it! Copy to output and remove from storage */
+            *work_completion = stored_completions[i];
+            
+            /* Shift remaining completions down */
+            for (int j = i; j < stored_count - 1; j++) {
+                stored_completions[j] = stored_completions[j + 1];
+            }
+            stored_count--;
+            
+            /* Check completion status */
+            if (work_completion->status != IBV_WC_SUCCESS) {
+                fprintf(stderr, "Work completion failed with status: %s (wr_id=%lu)\n", 
+                        ibv_wc_status_str(work_completion->status), work_completion->wr_id);
+                return PG_ERROR;
+            }
+            return PG_SUCCESS;
+        }
+    }
+    
+    /* Not found in storage, poll for new completions */
     while (1) {
         /* Initialize work completion structure */
         memset(work_completion, 0, sizeof(struct ibv_wc));
@@ -501,10 +528,14 @@ int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue,
                 }
                 return PG_SUCCESS;
             } else {
-                /* This is not the completion we want - for now, just continue polling
-                 * In a more sophisticated implementation, we would queue this completion */
-                fprintf(stderr, "Warning: Got unexpected completion with wr_id=%lu, expected=%lu\n",
-                        work_completion->wr_id, expected_wr_id);
+                /* Store this completion for later if we have space */
+                if (stored_count < MAX_STORED_COMPLETIONS) {
+                    stored_completions[stored_count] = *work_completion;
+                    stored_count++;
+                } else {
+                    fprintf(stderr, "Warning: Completion storage full, dropping completion with wr_id=%lu\n",
+                            work_completion->wr_id);
+                }
             }
         } else if (num_completions < 0) {
             fprintf(stderr, "Error polling completion queue: %d\n", num_completions);
