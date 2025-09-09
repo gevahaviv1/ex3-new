@@ -451,40 +451,67 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue,
     PG_CHECK_NULL(completion_queue, "Completion queue is NULL");
     PG_CHECK_NULL(work_completion, "Work completion pointer is NULL");
     
-    int num_completions;
-    int poll_count = 0;
-    const int max_polls = 10000000; /* 10M polls before timeout */
+    /* Initialize work completion structure */
+    memset(work_completion, 0, sizeof(struct ibv_wc));
     
-    /* Poll until we get a completion or timeout */
-    do {
-        num_completions = ibv_poll_cq(completion_queue, 1, work_completion);
+    /* Poll until we get a completion */
+    while (1) {
+        int num_completions = ibv_poll_cq(completion_queue, 1, work_completion);
         
-        if (num_completions < 0) {
-            fprintf(stderr, "Error polling completion queue\n");
+        if (num_completions > 0) {
+            /* Got a completion - check status */
+            if (work_completion->status != IBV_WC_SUCCESS) {
+                fprintf(stderr, "Work completion failed with status: %s\n", 
+                        ibv_wc_status_str(work_completion->status));
+                return PG_ERROR;
+            }
+            return PG_SUCCESS;
+        } else if (num_completions < 0) {
+            fprintf(stderr, "Error polling completion queue: %d\n", num_completions);
             return PG_ERROR;
         }
         
-        if (num_completions == 0) {
-            poll_count++;
-            if (poll_count >= max_polls) {
-                fprintf(stderr, "Timeout waiting for RDMA completion after %d polls\n", max_polls);
-                return PG_ERROR;
+        /* num_completions == 0: no completions available, keep polling */
+        /* Small yield to avoid excessive CPU usage */
+        usleep(1);
+    }
+}
+
+int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, 
+                                     struct ibv_wc *work_completion,
+                                     uint64_t expected_wr_id) {
+    PG_CHECK_NULL(completion_queue, "Completion queue is NULL");
+    PG_CHECK_NULL(work_completion, "Work completion pointer is NULL");
+    
+    /* Keep polling until we get the specific completion we want */
+    while (1) {
+        /* Initialize work completion structure */
+        memset(work_completion, 0, sizeof(struct ibv_wc));
+        
+        int num_completions = ibv_poll_cq(completion_queue, 1, work_completion);
+        
+        if (num_completions > 0) {
+            /* Check if this is the completion we're looking for */
+            if (work_completion->wr_id == expected_wr_id) {
+                /* Got the right completion - check status */
+                if (work_completion->status != IBV_WC_SUCCESS) {
+                    fprintf(stderr, "Work completion failed with status: %s (wr_id=%lu)\n", 
+                            ibv_wc_status_str(work_completion->status), work_completion->wr_id);
+                    return PG_ERROR;
+                }
+                return PG_SUCCESS;
+            } else {
+                /* This is not the completion we want - for now, just continue polling
+                 * In a more sophisticated implementation, we would queue this completion */
+                fprintf(stderr, "Warning: Got unexpected completion with wr_id=%lu, expected=%lu\n",
+                        work_completion->wr_id, expected_wr_id);
             }
-            /* Small delay to avoid busy waiting */
-            if (poll_count % 1000000 == 0) {
-                usleep(1000); /* 1ms delay every 1M polls */
-            }
+        } else if (num_completions < 0) {
+            fprintf(stderr, "Error polling completion queue: %d\n", num_completions);
+            return PG_ERROR;
         }
         
-        /* Continue polling if no completions are ready */
-    } while (num_completions == 0);
-    
-    /* Check if the operation completed successfully */
-    if (work_completion->status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "Work completion failed with status: %s\n", 
-                ibv_wc_status_str(work_completion->status));
-        return PG_ERROR;
+        /* num_completions == 0: no completions available, keep polling */
+        usleep(1);
     }
-    
-    return PG_SUCCESS;
 }

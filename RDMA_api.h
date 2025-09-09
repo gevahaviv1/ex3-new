@@ -239,4 +239,19 @@ int rdma_post_send_request(struct ibv_qp *queue_pair,
 int rdma_poll_for_completion(struct ibv_cq *completion_queue, 
                             struct ibv_wc *work_completion);
 
+/**
+ * Poll completion queue for specific work completion by ID
+ * 
+ * Blocks until a work request with the specified work request ID completes.
+ * This allows distinguishing between send and receive completions.
+ * 
+ * @param completion_queue: Completion queue to poll
+ * @param work_completion: Structure to store completion information
+ * @param expected_wr_id: Work request ID to wait for
+ * @return: PG_SUCCESS on successful completion, PG_ERROR on failure
+ */
+int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, 
+                                     struct ibv_wc *work_completion,
+                                     uint64_t expected_wr_id);
+
 #endif /* RDMA_API_H */

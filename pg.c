@@ -679,8 +679,8 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
   printf("[Process %d] DEBUG: Waiting for receive completion...\n",
          process_group->process_rank);
 
-  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
-                               &work_completion) != PG_SUCCESS) {
+  if (rdma_poll_for_specific_completion(process_group->rdma_context.completion_queue,
+                                       &work_completion, RDMA_WR_ID_RECV) != PG_SUCCESS) {
     fprintf(stderr,
             "[Process %d] ERROR: Failed to complete receive operation\n",
             process_group->process_rank);
@@ -697,8 +697,8 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
   printf("[Process %d] DEBUG: Waiting for send completion...\n",
          process_group->process_rank);
 
-  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
-                               &work_completion) != PG_SUCCESS) {
+  if (rdma_poll_for_specific_completion(process_group->rdma_context.completion_queue,
+                                       &work_completion, RDMA_WR_ID_SEND) != PG_SUCCESS) {
     fprintf(stderr, "[Process %d] ERROR: Failed to complete send operation\n",
             process_group->process_rank);
     return PG_ERROR;
