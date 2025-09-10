@@ -839,11 +839,21 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
   size_t total_data_size = element_count * element_size;
   size_t chunk_size_bytes = (element_count / group_size) * element_size;
 
-  /* Initialize receive buffer and place local data in correct position */
+  /* Initialize receive buffer and place local data in correct position.
+   * Handle aliasing between send_buffer and receive_buffer by copying
+   * the local chunk to a temporary buffer before clearing receive_buffer. */
+  void *tmp_chunk = malloc(chunk_size_bytes);
+  if (!tmp_chunk) {
+    fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for all-gather\n", process_rank);
+    return PG_ERROR;
+  }
+  memcpy(tmp_chunk, send_buffer, chunk_size_bytes);
+
   memset(receive_buffer, 0, total_data_size);
   char *my_data_position =
       (char *)receive_buffer + (process_rank * chunk_size_bytes);
-  memcpy(my_data_position, send_buffer, chunk_size_bytes);
+  memcpy(my_data_position, tmp_chunk, chunk_size_bytes);
+  free(tmp_chunk);
 
   /* Copy initialized data to working buffer */
   memcpy(process_group->right_send_buffer, receive_buffer, total_data_size);
