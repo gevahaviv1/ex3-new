@@ -371,6 +371,18 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  // Ensure library uses this process's intended rank when multiple
+  // processes run on the same host (duplicate hostnames). This avoids
+  // hostname-based rank collisions by explicitly setting PG_RANK.
+  {
+    char rank_str[16];
+    snprintf(rank_str, sizeof(rank_str), "%d", my_index);
+    if (setenv("PG_RANK", rank_str, 1) != 0) {
+      perror("Failed to set PG_RANK");
+      return 1;
+    }
+  }
+
   printf("Process Index: %d\n", my_index);
   printf("Host List: %s\n", host_list);
 
