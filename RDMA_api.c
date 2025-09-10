@@ -267,7 +267,7 @@ int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair,
         .max_dest_rd_atomic = RDMA_DEFAULT_MAX_RD_ATOMIC,
         .min_rnr_timer = RDMA_DEFAULT_MIN_RNR_TIMER,
         .ah_attr = {
-            .is_global = 1,  /* Use global routing for multi-host connections */
+            .is_global = 0,  /* Try LID-based routing first for better compatibility */
             .dlid = remote_qp_info->local_identifier,
             .sl = 0,         /* Service level */
             .src_path_bits = 0,
