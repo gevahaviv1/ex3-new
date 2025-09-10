@@ -762,6 +762,14 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   /* Copy input data to working buffer */
   memcpy(process_group->right_send_buffer, send_buffer, total_data_size);
 
+  /* Temp buffer to preserve reduced chunk across buffer swaps */
+  void *reduced_chunk_tmp = malloc(chunk_size_bytes);
+  if (!reduced_chunk_tmp) {
+    fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for reduce-scatter\n",
+            process_rank);
+    return PG_ERROR;
+  }
+
   /* Perform reduce-scatter algorithm with (group_size - 1) steps */
   for (int communication_step = 0; communication_step < group_size - 1;
        communication_step++) {
@@ -774,6 +782,7 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
                                         process_group->right_send_buffer,
                                         process_group->left_receive_buffer,
                                         total_data_size) != PG_SUCCESS) {
+      free(reduced_chunk_tmp);
       return PG_ERROR;
     }
 
@@ -783,8 +792,11 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
     char *remote_chunk_ptr = (char *)process_group->left_receive_buffer +
                              (reduction_chunk_index * chunk_size_bytes);
 
-    int chunk_element_count = chunk_size_bytes / element_size;
-    pg_apply_reduction_operation(local_chunk_ptr, local_chunk_ptr,
+    int chunk_element_count = (int)(chunk_size_bytes / element_size);
+
+    /* Reduce into temp buffer to avoid being clobbered by the buffer swap */
+    memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_size_bytes);
+    pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp,
                                  remote_chunk_ptr, chunk_element_count,
                                  data_type, reduction_op);
 
@@ -793,7 +805,7 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
            total_data_size);
     memcpy((char *)process_group->right_send_buffer +
                (reduction_chunk_index * chunk_size_bytes),
-           local_chunk_ptr, chunk_size_bytes);
+           reduced_chunk_tmp, chunk_size_bytes);
   }
 
   /* Extract this process's final result chunk */
@@ -801,6 +813,8 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   char *my_result_chunk = (char *)process_group->right_send_buffer +
                           (my_chunk_index * chunk_size_bytes);
   memcpy(receive_buffer, my_result_chunk, chunk_size_bytes);
+
+  free(reduced_chunk_tmp);
 
   return PG_SUCCESS;
 }
