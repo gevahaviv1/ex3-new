@@ -19,6 +19,7 @@ typedef struct {
     struct ibv_pd *protection_domain;      /* Protection domain for memory regions */
     struct ibv_cq *completion_queue;       /* Completion queue for work completions */
     int ib_port_number;                    /* Active InfiniBand port number */
+    int gid_index;                         /* GID index for RoCE/GRH addressing */
 } rdma_context_t;
 
 /**
@@ -141,7 +142,8 @@ int rdma_transition_qp_to_init(struct ibv_qp *queue_pair, int ib_port_num);
  */
 int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair, 
                              rdma_qp_bootstrap_info_t *remote_qp_info, 
-                             int ib_port_num);
+                             int ib_port_num,
+                             int gid_index);
 
 /**
  * Transition queue pair from RTR to Ready-to-Send (RTS) state

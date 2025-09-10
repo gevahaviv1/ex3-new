@@ -62,6 +62,12 @@ int rdma_initialize_context(rdma_context_t *rdma_ctx, const char *device_name) {
     /* Initialize context to zero state */
     memset(rdma_ctx, 0, sizeof(*rdma_ctx));
     
+    /* Allow environment to select device explicitly */
+    const char *env_dev = getenv("PG_IB_DEVICE");
+    if (device_name == NULL && env_dev && *env_dev) {
+        device_name = env_dev;
+    }
+
     /* Get list of available InfiniBand devices */
     struct ibv_device **device_list = ibv_get_device_list(NULL);
     if (!device_list) {
@@ -106,22 +112,58 @@ int rdma_initialize_context(rdma_context_t *rdma_ctx, const char *device_name) {
         return PG_ERROR;
     }
     
-    /* Select an active port (fallback to default if not found) */
+    /* Select port (env override) and ensure it's ACTIVE */
     rdma_ctx->ib_port_number = RDMA_DEFAULT_IB_PORT;
+    const char *env_port = getenv("PG_IB_PORT");
+    if (env_port && *env_port) {
+        int p = atoi(env_port);
+        if (p > 0 && p < 255) rdma_ctx->ib_port_number = p;
+    }
 
     /* Try to find an active port if possible */
     {
         struct ibv_device_attr dev_attr;
         if (ibv_query_device(rdma_ctx->device_context, &dev_attr) == 0) {
-            for (uint8_t p = 1; p <= dev_attr.phys_port_cnt; ++p) {
-                struct ibv_port_attr port_attr;
-                if (ibv_query_port(rdma_ctx->device_context, p, &port_attr) == 0) {
-                    if (port_attr.state == IBV_PORT_ACTIVE) {
-                        rdma_ctx->ib_port_number = p;
-                        break;
+            /* If env specified a port, prefer it if ACTIVE, else pick first ACTIVE */
+            int chosen = 0;
+            if (rdma_ctx->ib_port_number >= 1 && rdma_ctx->ib_port_number <= dev_attr.phys_port_cnt) {
+                struct ibv_port_attr pa;
+                if (ibv_query_port(rdma_ctx->device_context, rdma_ctx->ib_port_number, &pa) == 0 &&
+                    pa.state == IBV_PORT_ACTIVE) {
+                    chosen = 1;
+                }
+            }
+            if (!chosen) {
+                for (uint8_t p = 1; p <= dev_attr.phys_port_cnt; ++p) {
+                    struct ibv_port_attr port_attr;
+                    if (ibv_query_port(rdma_ctx->device_context, p, &port_attr) == 0) {
+                        if (port_attr.state == IBV_PORT_ACTIVE) {
+                            rdma_ctx->ib_port_number = p;
+                            chosen = 1;
+                            break;
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /* Set GID index (env override) */
+    rdma_ctx->gid_index = RDMA_DEFAULT_GID_INDEX;
+    const char *env_gid = getenv("PG_GID_INDEX");
+    if (env_gid && *env_gid) {
+        int idx = atoi(env_gid);
+        if (idx >= 0 && idx < 128) rdma_ctx->gid_index = idx;
+    }
+
+    /* Log device/port choice for diagnostics */
+    fprintf(stderr, "[RDMA] device=%s port=%d gid_index=%d\n",
+            ibv_get_device_name(rdma_ctx->ib_device), rdma_ctx->ib_port_number, rdma_ctx->gid_index);
+    {
+        struct ibv_port_attr pa; memset(&pa, 0, sizeof(pa));
+        if (ibv_query_port(rdma_ctx->device_context, rdma_ctx->ib_port_number, &pa) == 0) {
+            fprintf(stderr, "[RDMA] port state=%u lid=%u active_mtu=%u link_layer=%u\n",
+                    pa.state, pa.lid, pa.active_mtu, pa.link_layer);
         }
     }
     
@@ -270,7 +312,8 @@ int rdma_transition_qp_to_init(struct ibv_qp *queue_pair, int ib_port_num) {
 
 int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair, 
                              rdma_qp_bootstrap_info_t *remote_qp_info, 
-                             int ib_port_num) {
+                             int ib_port_num,
+                             int gid_index) {
     PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
     PG_CHECK_NULL(remote_qp_info, "Remote QP info is NULL");
     
@@ -294,7 +337,7 @@ int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair,
     if (use_global) {
         qp_attributes.ah_attr.grh.dgid = remote_qp_info->global_identifier;
         qp_attributes.ah_attr.grh.flow_label = 0;
-        qp_attributes.ah_attr.grh.sgid_index = RDMA_DEFAULT_GID_INDEX;
+        qp_attributes.ah_attr.grh.sgid_index = gid_index;
         qp_attributes.ah_attr.grh.hop_limit = 0xFF;
         qp_attributes.ah_attr.grh.traffic_class = 0;
     }
@@ -378,13 +421,26 @@ void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
     /* Query GID (Global Identifier) */
     int gid_result = ibv_query_gid(rdma_ctx->device_context, 
                                   rdma_ctx->ib_port_number, 
-                                  RDMA_DEFAULT_GID_INDEX, 
+                                  rdma_ctx->gid_index, 
                                   &qp_info->global_identifier);
     
     if (gid_result != 0) {
         /* Clear GID on failure */
         memset(&qp_info->global_identifier, 0, sizeof(qp_info->global_identifier));
     }
+
+    /* Debug: show the local QP bootstrap info */
+    char gid_str[64];
+    snprintf(gid_str, sizeof(gid_str),
+             "%016llx:%016llx",
+             (unsigned long long)qp_info->global_identifier.global.subnet_prefix,
+             (unsigned long long)qp_info->global_identifier.global.interface_id);
+    fprintf(stderr,
+            "[RDMA] local QP %u LID=%u PSN=%u GID=%s\n",
+            qp_info->queue_pair_number,
+            qp_info->local_identifier,
+            qp_info->packet_sequence_number,
+            gid_result == 0 ? gid_str : "<none>");
 }
 
 /*

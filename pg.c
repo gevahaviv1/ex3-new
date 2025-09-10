@@ -336,8 +336,9 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
       rdma_qp_bootstrap_info_t left_remote_qp = right_qp_infos[left_neighbor];  /* left neighbor's right QP (their send QP) */
       rdma_qp_bootstrap_info_t right_remote_qp = left_qp_infos[right_neighbor]; /* right neighbor's left QP (their receive QP) */
       
-      printf("[Process 0] DEBUG: Sending to rank %d: left_neighbor=%d (right_qp), right_neighbor=%d (left_qp)\n", 
-             target_rank, left_neighbor, right_neighbor);
+      printf("[Process 0] DEBUG: Sending to rank %d: left_neighbor=%d (right_qp=%u, lid=%u), right_neighbor=%d (left_qp=%u, lid=%u)\n", 
+             target_rank, left_neighbor, left_remote_qp.queue_pair_number, left_remote_qp.local_identifier,
+             right_neighbor, right_remote_qp.queue_pair_number, right_remote_qp.local_identifier);
       
       /* Send the correct remote QP info */
       if (send(client_sockets[target_rank], &left_remote_qp, sizeof(left_remote_qp), 0) != sizeof(left_remote_qp) ||
@@ -408,8 +409,9 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
       return PG_ERROR;
     }
 
-    printf("[Process %d] DEBUG: Received neighbor info: left_remote_qp=%u, right_remote_qp=%u\n",
-           rank, left_remote_info->queue_pair_number, right_remote_info->queue_pair_number);
+    printf("[Process %d] DEBUG: Received neighbor info: left_remote_qp=%u lid=%u, right_remote_qp=%u lid=%u\n",
+           rank, left_remote_info->queue_pair_number, left_remote_info->local_identifier,
+           right_remote_info->queue_pair_number, right_remote_info->local_identifier);
 
     close(client_socket);
     return PG_SUCCESS;
@@ -450,10 +452,12 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
   if (rdma_transition_qp_to_rtr(process_group->left_neighbor_qp,
                                 &left_remote_info,
-                                process_group->rdma_context.ib_port_number) != PG_SUCCESS ||
+                                process_group->rdma_context.ib_port_number,
+                                process_group->rdma_context.gid_index) != PG_SUCCESS ||
       rdma_transition_qp_to_rtr(process_group->right_neighbor_qp,
                                 &right_remote_info,
-                                process_group->rdma_context.ib_port_number) != PG_SUCCESS) {
+                                process_group->rdma_context.ib_port_number,
+                                process_group->rdma_context.gid_index) != PG_SUCCESS) {
     fprintf(stderr, "Failed to transition queue pairs to RTR state\n");
     return PG_ERROR;
   }
