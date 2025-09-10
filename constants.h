@@ -34,7 +34,7 @@
 #define RDMA_DEFAULT_RETRY_COUNT 7      /* Number of retries for timeout errors */
 #define RDMA_DEFAULT_RNR_RETRY 7        /* Number of RNR (Receiver Not Ready) retries */
 #define RDMA_DEFAULT_MIN_RNR_TIMER 12   /* Minimum RNR NAK timer */
-#define RDMA_DEFAULT_MAX_RD_ATOMIC 1    /* Maximum outstanding RDMA read/atomic ops */
+#define RDMA_DEFAULT_MAX_RD_ATOMIC 4    /* Maximum outstanding RDMA read/atomic ops */
 
 /*
  * Buffer Management
