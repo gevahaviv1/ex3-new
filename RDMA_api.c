@@ -106,8 +106,24 @@ int rdma_initialize_context(rdma_context_t *rdma_ctx, const char *device_name) {
         return PG_ERROR;
     }
     
-    /* Set default InfiniBand port */
+    /* Select an active port (fallback to default if not found) */
     rdma_ctx->ib_port_number = RDMA_DEFAULT_IB_PORT;
+
+    /* Try to find an active port if possible */
+    {
+        struct ibv_device_attr dev_attr;
+        if (ibv_query_device(rdma_ctx->device_context, &dev_attr) == 0) {
+            for (uint8_t p = 1; p <= dev_attr.phys_port_cnt; ++p) {
+                struct ibv_port_attr port_attr;
+                if (ibv_query_port(rdma_ctx->device_context, p, &port_attr) == 0) {
+                    if (port_attr.state == IBV_PORT_ACTIVE) {
+                        rdma_ctx->ib_port_number = p;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     
     ibv_free_device_list(device_list);
     return PG_SUCCESS;
@@ -258,29 +274,30 @@ int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair,
     PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
     PG_CHECK_NULL(remote_qp_info, "Remote QP info is NULL");
     
+    /* Determine addressing mode: prefer LID if available, otherwise use GID */
+    int use_global = (remote_qp_info->local_identifier == 0);
+
     /* Configure attributes for RTR (Ready-to-Receive) state */
-    struct ibv_qp_attr qp_attributes = {
-        .qp_state = IBV_QPS_RTR,
-        .path_mtu = RDMA_DEFAULT_MTU,
-        .dest_qp_num = remote_qp_info->queue_pair_number,
-        .rq_psn = remote_qp_info->packet_sequence_number,
-        .max_dest_rd_atomic = RDMA_DEFAULT_MAX_RD_ATOMIC,
-        .min_rnr_timer = RDMA_DEFAULT_MIN_RNR_TIMER,
-        .ah_attr = {
-            .is_global = 0,  /* Try LID-based routing first for better compatibility */
-            .dlid = remote_qp_info->local_identifier,
-            .sl = 0,         /* Service level */
-            .src_path_bits = 0,
-            .port_num = ib_port_num,
-            .grh = {
-                .dgid = remote_qp_info->global_identifier,
-                .flow_label = 0,
-                .sgid_index = 0,
-                .hop_limit = 0xFF,
-                .traffic_class = 0
-            }
-        }
-    };
+    struct ibv_qp_attr qp_attributes;
+    memset(&qp_attributes, 0, sizeof(qp_attributes));
+    qp_attributes.qp_state = IBV_QPS_RTR;
+    qp_attributes.path_mtu = RDMA_DEFAULT_MTU;
+    qp_attributes.dest_qp_num = remote_qp_info->queue_pair_number;
+    qp_attributes.rq_psn = remote_qp_info->packet_sequence_number;
+    qp_attributes.max_dest_rd_atomic = RDMA_DEFAULT_MAX_RD_ATOMIC;
+    qp_attributes.min_rnr_timer = RDMA_DEFAULT_MIN_RNR_TIMER;
+    qp_attributes.ah_attr.is_global = use_global ? 1 : 0;
+    qp_attributes.ah_attr.dlid = remote_qp_info->local_identifier;
+    qp_attributes.ah_attr.sl = 0;
+    qp_attributes.ah_attr.src_path_bits = 0;
+    qp_attributes.ah_attr.port_num = ib_port_num;
+    if (use_global) {
+        qp_attributes.ah_attr.grh.dgid = remote_qp_info->global_identifier;
+        qp_attributes.ah_attr.grh.flow_label = 0;
+        qp_attributes.ah_attr.grh.sgid_index = RDMA_DEFAULT_GID_INDEX;
+        qp_attributes.ah_attr.grh.hop_limit = 0xFF;
+        qp_attributes.ah_attr.grh.traffic_class = 0;
+    }
     
     /* Specify which attributes are being modified */
     int attribute_mask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
@@ -470,7 +487,7 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue,
             fprintf(stderr, "Error polling completion queue: %d\n", num_completions);
             return PG_ERROR;
         }
-        
+
         /* num_completions == 0: no completions available, keep polling */
         /* Small yield to avoid excessive CPU usage */
         usleep(1);
