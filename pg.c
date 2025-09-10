@@ -743,8 +743,10 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
            reduced_chunk_tmp, chunk_size_bytes);
   }
 
-  /* Extract this process's final result chunk */
-  int my_chunk_index = process_rank;
+  /* Extract this process's final result chunk.
+   * In a ring reduce-scatter with rightward sends and P-1 steps,
+   * process i ends up with chunk index (i - (P-1)) mod P. */
+  int my_chunk_index = (process_rank - (group_size - 1) + group_size) % group_size;
   char *my_result_chunk = (char *)process_group->right_send_buffer +
                           (my_chunk_index * chunk_size_bytes);
   memcpy(receive_buffer, my_result_chunk, chunk_size_bytes);
