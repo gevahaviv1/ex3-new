@@ -282,10 +282,9 @@ int pgnet_determine_process_rank(char **hostname_array, int process_group_size) 
     if (env_rank && *env_rank) {
         int r = atoi(env_rank);
         if (r >= 0 && r < process_group_size) {
-            fprintf(stderr, "[PG] Using rank from PG_RANK=%d\n", r);
             return r;
         } else {
-            fprintf(stderr, "[PG] PG_RANK=%d out of range [0,%d)\n", r, process_group_size);
+            fprintf(stderr, "PG_RANK=%d out of range [0,%d)\n", r, process_group_size);
             return -1;
         }
     }

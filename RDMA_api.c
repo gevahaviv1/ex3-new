@@ -156,16 +156,7 @@ int rdma_initialize_context(rdma_context_t *rdma_ctx, const char *device_name) {
         if (idx >= 0 && idx < 128) rdma_ctx->gid_index = idx;
     }
 
-    /* Log device/port choice for diagnostics */
-    fprintf(stderr, "[RDMA] device=%s port=%d gid_index=%d\n",
-            ibv_get_device_name(rdma_ctx->ib_device), rdma_ctx->ib_port_number, rdma_ctx->gid_index);
-    {
-        struct ibv_port_attr pa; memset(&pa, 0, sizeof(pa));
-        if (ibv_query_port(rdma_ctx->device_context, rdma_ctx->ib_port_number, &pa) == 0) {
-            fprintf(stderr, "[RDMA] port state=%u lid=%u active_mtu=%u link_layer=%u\n",
-                    pa.state, pa.lid, pa.active_mtu, pa.link_layer);
-        }
-    }
+    /* Diagnostics intentionally quiet by default; errors are still reported */
     
     ibv_free_device_list(device_list);
     return PG_SUCCESS;
@@ -429,18 +420,7 @@ void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
         memset(&qp_info->global_identifier, 0, sizeof(qp_info->global_identifier));
     }
 
-    /* Debug: show the local QP bootstrap info */
-    char gid_str[64];
-    snprintf(gid_str, sizeof(gid_str),
-             "%016llx:%016llx",
-             (unsigned long long)qp_info->global_identifier.global.subnet_prefix,
-             (unsigned long long)qp_info->global_identifier.global.interface_id);
-    fprintf(stderr,
-            "[RDMA] local QP %u LID=%u PSN=%u GID=%s\n",
-            qp_info->queue_pair_number,
-            qp_info->local_identifier,
-            qp_info->packet_sequence_number,
-            gid_result == 0 ? gid_str : "<none>");
+    /* Quiet: omit verbose local QP diagnostics; keep errors elsewhere */
 }
 
 /*
