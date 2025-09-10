@@ -325,20 +325,16 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
       int left_neighbor = (target_rank - 1 + world_size) % world_size;
       int right_neighbor = (target_rank + 1) % world_size;
       
-      /* CORRECTED: For ring topology, target_rank needs to connect:
-       * - left_neighbor_qp connects to left_neighbor's right_qp (to receive from left)
-       * - right_neighbor_qp connects to right_neighbor's left_qp (to send to right)
+      /* FINAL FIX: For ring topology, target_rank needs to connect:
+       * - left_neighbor_qp (for receiving FROM left) connects to left_neighbor's SENDING QP (their right_qp)
+       * - right_neighbor_qp (for sending TO right) connects to right_neighbor's RECEIVING QP (their left_qp)
        * 
-       * BUT: The QP semantics are:
-       * - left_neighbor_qp is for receiving FROM left neighbor
-       * - right_neighbor_qp is for sending TO right neighbor
-       * 
-       * So we need:
-       * - left_remote_qp should be left_neighbor's SENDING QP (their right_qp)
-       * - right_remote_qp should be right_neighbor's RECEIVING QP (their left_qp)
+       * The QP semantics are:
+       * - left_neighbor_qp is for receiving FROM left neighbor → connect to their right_qp (send QP)
+       * - right_neighbor_qp is for sending TO right neighbor → connect to their left_qp (receive QP)
        */
-      rdma_qp_bootstrap_info_t left_remote_qp = left_qp_infos[left_neighbor];   /* left neighbor's left QP (their receive QP) */
-      rdma_qp_bootstrap_info_t right_remote_qp = right_qp_infos[right_neighbor]; /* right neighbor's right QP (their send QP) */
+      rdma_qp_bootstrap_info_t left_remote_qp = right_qp_infos[left_neighbor];  /* left neighbor's right QP (their send QP) */
+      rdma_qp_bootstrap_info_t right_remote_qp = left_qp_infos[right_neighbor]; /* right neighbor's left QP (their receive QP) */
       
       printf("[Process 0] DEBUG: Sending to rank %d: left_neighbor=%d (right_qp), right_neighbor=%d (left_qp)\n", 
              target_rank, left_neighbor, right_neighbor);
@@ -359,9 +355,9 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
     int left_neighbor = (world_size - 1) % world_size;  /* rank 3 for 4 processes */
     int right_neighbor = 1 % world_size;                /* rank 1 for 4 processes */
     
-    /* Rank 0 connects: left_qp to rank 3's left_qp, right_qp to rank 1's right_qp */
-    *left_remote_info = left_qp_infos[left_neighbor];    /* rank 3's left QP (their receive QP) */
-    *right_remote_info = right_qp_infos[right_neighbor]; /* rank 1's right QP (their send QP) */
+    /* Rank 0 connects: left_qp to rank 3's right_qp, right_qp to rank 1's left_qp */
+    *left_remote_info = right_qp_infos[left_neighbor];   /* rank 3's right QP (their send QP) */
+    *right_remote_info = left_qp_infos[right_neighbor];  /* rank 1's left QP (their receive QP) */
     
     printf("[Process 0] DEBUG: My neighbors - left: rank %d, right: rank %d\n", 
            left_neighbor, right_neighbor);
