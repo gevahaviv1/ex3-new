@@ -277,6 +277,19 @@ void pgnet_free_hostname_list(char **hostname_array, int hostname_count) {
 int pgnet_determine_process_rank(char **hostname_array, int process_group_size) {
     PG_CHECK_NULL(hostname_array, "Hostname array is NULL");
     
+    /* Allow explicit override via environment for multi-rank-per-host cases */
+    const char *env_rank = getenv("PG_RANK");
+    if (env_rank && *env_rank) {
+        int r = atoi(env_rank);
+        if (r >= 0 && r < process_group_size) {
+            fprintf(stderr, "[PG] Using rank from PG_RANK=%d\n", r);
+            return r;
+        } else {
+            fprintf(stderr, "[PG] PG_RANK=%d out of range [0,%d)\n", r, process_group_size);
+            return -1;
+        }
+    }
+    
     /* Get local hostname */
     char local_hostname[PG_HOSTNAME_MAX_LENGTH];
     if (gethostname(local_hostname, sizeof(local_hostname)) != 0) {
