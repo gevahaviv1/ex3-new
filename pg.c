@@ -780,8 +780,8 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
   }
 
   size_t element_size = pg_get_datatype_element_size(data_type);
-  size_t total_data_size = element_count * element_size;
-  size_t chunk_size_bytes = (element_count / group_size) * element_size;
+  size_t chunk_size_bytes = element_count * element_size;  /* Each process contributes element_count elements */
+  size_t total_data_size = chunk_size_bytes * group_size;  /* Total size is chunk_size * number of processes */
 
   /* Initialize receive buffer and place local data in correct position.
    * Handle aliasing between send_buffer and receive_buffer by copying
