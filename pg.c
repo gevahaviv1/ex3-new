@@ -898,8 +898,11 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
   }
 
   /* Phase 2: All-gather to distribute complete results */
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
+  int chunk_size = element_count / process_group->process_group_size;
+  
   if (pg_all_gather(process_group_handle, receive_buffer, receive_buffer,
-                    element_count, data_type) != PG_SUCCESS) {
+                    chunk_size, data_type) != PG_SUCCESS) {
     fprintf(stderr, "All-reduce failed during all-gather phase\n");
     return PG_ERROR;
   }
