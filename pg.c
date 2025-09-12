@@ -740,7 +740,7 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
        communication_step++) {
     /* Determine which chunk to reduce in this step */
     int reduction_chunk_index =
-        (process_rank - communication_step + group_size) % group_size;
+        (process_rank - communication_step - 1 + group_size) % group_size;
 
     /* Perform ring communication step */
     if (perform_ring_communication_step(process_group,
@@ -936,7 +936,7 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
       (pg_handle_internal_t *)process_group_handle;
   int chunk_size = element_count / process_group->process_group_size;
   size_t element_size = pg_get_datatype_element_size(data_type);
-
+  
   /* Allocate temporary buffer for all-gather result */
   void *temp_buffer = malloc(element_count * element_size);
   if (!temp_buffer) {
@@ -945,7 +945,7 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
   }
 
   if (pg_all_gather(process_group_handle, receive_buffer, temp_buffer,
-                    chunk_size, data_type) != PG_SUCCESS) {
+                    element_count, data_type) != PG_SUCCESS) {
     fprintf(stderr, "All-reduce failed during all-gather phase\n");
     free(temp_buffer);
     return PG_ERROR;
