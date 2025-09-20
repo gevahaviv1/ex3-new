@@ -22,8 +22,7 @@
  * @param device_list: Array of available devices
  * @return: Pointer to device or NULL if not found
  */
-static struct ibv_device *find_ib_device(const char *device_name,
-                                         struct ibv_device **device_list) {
+static struct ibv_device *find_ib_device(const char *device_name, struct ibv_device **device_list) {
   if (!device_list || !device_list[0]) {
     return NULL;
   }
@@ -101,8 +100,7 @@ int rdma_initialize_context(rdma_context_t *rdma_ctx, const char *device_name) {
   }
 
   /* Create completion queue */
-  rdma_ctx->completion_queue = ibv_create_cq(
-      rdma_ctx->device_context, RDMA_DEFAULT_CQ_ENTRIES, NULL, NULL, 0);
+  rdma_ctx->completion_queue = ibv_create_cq(rdma_ctx->device_context, RDMA_DEFAULT_CQ_ENTRIES, NULL, NULL, 0);
   if (!rdma_ctx->completion_queue) {
     fprintf(stderr, "Failed to create completion queue\n");
     ibv_dealloc_pd(rdma_ctx->protection_domain);
@@ -125,11 +123,9 @@ int rdma_initialize_context(rdma_context_t *rdma_ctx, const char *device_name) {
     if (ibv_query_device(rdma_ctx->device_context, &dev_attr) == 0) {
       /* If env specified a port, prefer it if ACTIVE, else pick first ACTIVE */
       int chosen = 0;
-      if (rdma_ctx->ib_port_number >= 1 &&
-          rdma_ctx->ib_port_number <= dev_attr.phys_port_cnt) {
+      if (rdma_ctx->ib_port_number >= 1 && rdma_ctx->ib_port_number <= dev_attr.phys_port_cnt) {
         struct ibv_port_attr pa;
-        if (ibv_query_port(rdma_ctx->device_context, rdma_ctx->ib_port_number,
-                           &pa) == 0 &&
+        if (ibv_query_port(rdma_ctx->device_context, rdma_ctx->ib_port_number, &pa) == 0 &&
             pa.state == IBV_PORT_ACTIVE) {
           chosen = 1;
         }
@@ -202,9 +198,7 @@ void rdma_cleanup_context(rdma_context_t *rdma_ctx) {
  * =============================================================================
  */
 
-struct ibv_mr *rdma_register_memory_buffer(rdma_context_t *rdma_ctx,
-                                           void *buffer_ptr,
-                                           size_t buffer_size) {
+struct ibv_mr *rdma_register_memory_buffer(rdma_context_t *rdma_ctx, void *buffer_ptr, size_t buffer_size) {
   PG_CHECK_NULL_PTR(rdma_ctx, "RDMA context is NULL");
   PG_CHECK_NULL_PTR(rdma_ctx->protection_domain, "Protection domain is NULL");
   PG_CHECK_NULL_PTR(buffer_ptr, "Buffer pointer is NULL");
@@ -215,14 +209,11 @@ struct ibv_mr *rdma_register_memory_buffer(rdma_context_t *rdma_ctx,
   }
 
   /* Register memory with appropriate access flags */
-  struct ibv_mr *memory_region =
-      ibv_reg_mr(rdma_ctx->protection_domain, buffer_ptr, buffer_size,
-                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
-                     IBV_ACCESS_REMOTE_WRITE);
+  struct ibv_mr *memory_region = ibv_reg_mr(rdma_ctx->protection_domain, buffer_ptr, buffer_size,
+                                            IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
 
   if (!memory_region) {
-    fprintf(stderr, "Failed to register memory region of size %zu\n",
-            buffer_size);
+    fprintf(stderr, "Failed to register memory region of size %zu\n", buffer_size);
     return NULL;
   }
 
@@ -245,8 +236,7 @@ void rdma_deregister_memory_buffer(struct ibv_mr *memory_region) {
  * =============================================================================
  */
 
-int rdma_create_queue_pair(rdma_context_t *rdma_ctx,
-                           struct ibv_qp **queue_pair_ptr) {
+int rdma_create_queue_pair(rdma_context_t *rdma_ctx, struct ibv_qp **queue_pair_ptr) {
   PG_CHECK_NULL(rdma_ctx, "RDMA context is NULL");
   PG_CHECK_NULL(rdma_ctx->protection_domain, "Protection domain is NULL");
   PG_CHECK_NULL(rdma_ctx->completion_queue, "Completion queue is NULL");
@@ -264,8 +254,7 @@ int rdma_create_queue_pair(rdma_context_t *rdma_ctx,
   };
 
   /* Create the queue pair */
-  *queue_pair_ptr =
-      ibv_create_qp(rdma_ctx->protection_domain, &qp_init_attributes);
+  *queue_pair_ptr = ibv_create_qp(rdma_ctx->protection_domain, &qp_init_attributes);
   if (!*queue_pair_ptr) {
     fprintf(stderr, "Failed to create queue pair\n");
     return PG_ERROR;
@@ -282,12 +271,10 @@ int rdma_transition_qp_to_init(struct ibv_qp *queue_pair, int ib_port_num) {
       .qp_state = IBV_QPS_INIT,
       .pkey_index = 0,
       .port_num = ib_port_num,
-      .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
-                         IBV_ACCESS_REMOTE_WRITE};
+      .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE};
 
   /* Specify which attributes are being modified */
-  int attribute_mask =
-      IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+  int attribute_mask = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
 
   /* Perform the state transition */
   int result = ibv_modify_qp(queue_pair, &qp_attributes, attribute_mask);
@@ -299,9 +286,8 @@ int rdma_transition_qp_to_init(struct ibv_qp *queue_pair, int ib_port_num) {
   return PG_SUCCESS;
 }
 
-int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair,
-                              rdma_qp_bootstrap_info_t *remote_qp_info,
-                              int ib_port_num, int gid_index) {
+int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair, rdma_qp_bootstrap_info_t *remote_qp_info, int ib_port_num,
+                              int gid_index) {
   PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
   PG_CHECK_NULL(remote_qp_info, "Remote QP info is NULL");
 
@@ -331,8 +317,7 @@ int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair,
   }
 
   /* Specify which attributes are being modified */
-  int attribute_mask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
-                       IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+  int attribute_mask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
                        IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
   /* Perform the state transition */
@@ -349,18 +334,16 @@ int rdma_transition_qp_to_rts(struct ibv_qp *queue_pair, uint32_t local_psn) {
   PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
 
   /* Configure attributes for RTS (Ready-to-Send) state */
-  struct ibv_qp_attr qp_attributes = {
-      .qp_state = IBV_QPS_RTS,
-      .timeout = RDMA_DEFAULT_TIMEOUT,
-      .retry_cnt = RDMA_DEFAULT_RETRY_COUNT,
-      .rnr_retry = RDMA_DEFAULT_RNR_RETRY,
-      .sq_psn = local_psn,
-      .max_rd_atomic = RDMA_DEFAULT_MAX_RD_ATOMIC};
+  struct ibv_qp_attr qp_attributes = {.qp_state = IBV_QPS_RTS,
+                                      .timeout = RDMA_DEFAULT_TIMEOUT,
+                                      .retry_cnt = RDMA_DEFAULT_RETRY_COUNT,
+                                      .rnr_retry = RDMA_DEFAULT_RNR_RETRY,
+                                      .sq_psn = local_psn,
+                                      .max_rd_atomic = RDMA_DEFAULT_MAX_RD_ATOMIC};
 
   /* Specify which attributes are being modified */
-  int attribute_mask = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-                       IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN |
-                       IBV_QP_MAX_QP_RD_ATOMIC;
+  int attribute_mask =
+      IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
 
   /* Perform the state transition */
   int result = ibv_modify_qp(queue_pair, &qp_attributes, attribute_mask);
@@ -388,8 +371,7 @@ void rdma_destroy_queue_pair(struct ibv_qp *queue_pair) {
  * =============================================================================
  */
 
-void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
-                                    struct ibv_qp *queue_pair,
+void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx, struct ibv_qp *queue_pair,
                                     rdma_qp_bootstrap_info_t *qp_info) {
   if (!rdma_ctx || !queue_pair || !qp_info) {
     return;
@@ -397,8 +379,7 @@ void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
 
   /* Query port attributes to get LID */
   struct ibv_port_attr port_attributes;
-  int query_result = ibv_query_port(rdma_ctx->device_context,
-                                    rdma_ctx->ib_port_number, &port_attributes);
+  int query_result = ibv_query_port(rdma_ctx->device_context, rdma_ctx->ib_port_number, &port_attributes);
 
   /* Fill in the bootstrap information */
   qp_info->queue_pair_number = queue_pair->qp_num;
@@ -406,9 +387,8 @@ void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
   qp_info->packet_sequence_number = generate_random_psn();
 
   /* Query GID (Global Identifier) */
-  int gid_result =
-      ibv_query_gid(rdma_ctx->device_context, rdma_ctx->ib_port_number,
-                    rdma_ctx->gid_index, &qp_info->global_identifier);
+  int gid_result = ibv_query_gid(rdma_ctx->device_context, rdma_ctx->ib_port_number, rdma_ctx->gid_index,
+                                 &qp_info->global_identifier);
 
   if (gid_result != 0) {
     /* Clear GID on failure */
@@ -424,27 +404,23 @@ void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
  * =============================================================================
  */
 
-int rdma_post_receive_request(struct ibv_qp *queue_pair, void *buffer_ptr,
-                              size_t buffer_size,
+int rdma_post_receive_request(struct ibv_qp *queue_pair, void *buffer_ptr, size_t buffer_size,
                               struct ibv_mr *memory_region) {
   PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
   PG_CHECK_NULL(buffer_ptr, "Buffer pointer is NULL");
   PG_CHECK_NULL(memory_region, "Memory region is NULL");
 
   /* Configure scatter-gather element */
-  struct ibv_sge scatter_gather_element = {.addr = (uint64_t)buffer_ptr,
-                                           .length = buffer_size,
-                                           .lkey = memory_region->lkey};
+  struct ibv_sge scatter_gather_element = {
+      .addr = (uint64_t)buffer_ptr, .length = buffer_size, .lkey = memory_region->lkey};
 
   /* Configure receive work request */
-  struct ibv_recv_wr receive_work_request = {.wr_id = RDMA_WR_ID_RECV,
-                                             .sg_list = &scatter_gather_element,
-                                             .num_sge = 1};
+  struct ibv_recv_wr receive_work_request = {
+      .wr_id = RDMA_WR_ID_RECV, .sg_list = &scatter_gather_element, .num_sge = 1};
 
   /* Post the receive request */
   struct ibv_recv_wr *bad_work_request;
-  int result =
-      ibv_post_recv(queue_pair, &receive_work_request, &bad_work_request);
+  int result = ibv_post_recv(queue_pair, &receive_work_request, &bad_work_request);
 
   if (result != 0) {
     fprintf(stderr, "Failed to post receive work request\n");
@@ -454,16 +430,15 @@ int rdma_post_receive_request(struct ibv_qp *queue_pair, void *buffer_ptr,
   return PG_SUCCESS;
 }
 
-int rdma_post_send_request(struct ibv_qp *queue_pair, void *buffer_ptr,
-                           size_t data_size, struct ibv_mr *memory_region) {
+int rdma_post_send_request(struct ibv_qp *queue_pair, void *buffer_ptr, size_t data_size,
+                           struct ibv_mr *memory_region) {
   PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
   PG_CHECK_NULL(buffer_ptr, "Buffer pointer is NULL");
   PG_CHECK_NULL(memory_region, "Memory region is NULL");
 
   /* Configure scatter-gather element */
-  struct ibv_sge scatter_gather_element = {.addr = (uint64_t)buffer_ptr,
-                                           .length = data_size,
-                                           .lkey = memory_region->lkey};
+  struct ibv_sge scatter_gather_element = {
+      .addr = (uint64_t)buffer_ptr, .length = data_size, .lkey = memory_region->lkey};
 
   /* Configure send work request */
   struct ibv_send_wr send_work_request = {
@@ -486,8 +461,7 @@ int rdma_post_send_request(struct ibv_qp *queue_pair, void *buffer_ptr,
   return PG_SUCCESS;
 }
 
-int rdma_poll_for_completion(struct ibv_cq *completion_queue,
-                             struct ibv_wc *work_completion) {
+int rdma_poll_for_completion(struct ibv_cq *completion_queue, struct ibv_wc *work_completion) {
   PG_CHECK_NULL(completion_queue, "Completion queue is NULL");
   PG_CHECK_NULL(work_completion, "Work completion pointer is NULL");
 
@@ -501,8 +475,7 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue,
     if (num_completions > 0) {
       /* Got a completion - check status */
       if (work_completion->status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "Work completion failed with status: %s\n",
-                ibv_wc_status_str(work_completion->status));
+        fprintf(stderr, "Work completion failed with status: %s\n", ibv_wc_status_str(work_completion->status));
         return PG_ERROR;
       }
       return PG_SUCCESS;
@@ -522,8 +495,7 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue,
 static struct ibv_wc stored_completions[MAX_STORED_COMPLETIONS];
 static int stored_count = 0;
 
-int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue,
-                                      struct ibv_wc *work_completion,
+int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, struct ibv_wc *work_completion,
                                       uint64_t expected_wr_id) {
   PG_CHECK_NULL(completion_queue, "Completion queue is NULL");
   PG_CHECK_NULL(work_completion, "Work completion pointer is NULL");
@@ -543,8 +515,7 @@ int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue,
       /* Check completion status */
       if (work_completion->status != IBV_WC_SUCCESS) {
         fprintf(stderr, "Work completion failed with status: %s (wr_id=%lu)\n",
-                ibv_wc_status_str(work_completion->status),
-                work_completion->wr_id);
+                ibv_wc_status_str(work_completion->status), work_completion->wr_id);
         return PG_ERROR;
       }
       return PG_SUCCESS;
@@ -563,10 +534,8 @@ int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue,
       if (work_completion->wr_id == expected_wr_id) {
         /* Got the right completion - check status */
         if (work_completion->status != IBV_WC_SUCCESS) {
-          fprintf(stderr,
-                  "Work completion failed with status: %s (wr_id=%lu)\n",
-                  ibv_wc_status_str(work_completion->status),
-                  work_completion->wr_id);
+          fprintf(stderr, "Work completion failed with status: %s (wr_id=%lu)\n",
+                  ibv_wc_status_str(work_completion->status), work_completion->wr_id);
           return PG_ERROR;
         }
         return PG_SUCCESS;

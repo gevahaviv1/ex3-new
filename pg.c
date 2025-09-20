@@ -32,18 +32,13 @@
  */
 static int allocate_communication_buffers(pg_handle_internal_t *process_group) {
   /* Allocate memory buffers for ring communication */
-  process_group->left_send_buffer =
-      malloc(process_group->total_buffer_size_bytes);
-  process_group->left_receive_buffer =
-      malloc(process_group->total_buffer_size_bytes);
-  process_group->right_send_buffer =
-      malloc(process_group->total_buffer_size_bytes);
-  process_group->right_receive_buffer =
-      malloc(process_group->total_buffer_size_bytes);
+  process_group->left_send_buffer = malloc(process_group->total_buffer_size_bytes);
+  process_group->left_receive_buffer = malloc(process_group->total_buffer_size_bytes);
+  process_group->right_send_buffer = malloc(process_group->total_buffer_size_bytes);
+  process_group->right_receive_buffer = malloc(process_group->total_buffer_size_bytes);
 
   /* Check if all allocations succeeded */
-  if (!process_group->left_send_buffer || !process_group->left_receive_buffer ||
-      !process_group->right_send_buffer ||
+  if (!process_group->left_send_buffer || !process_group->left_receive_buffer || !process_group->right_send_buffer ||
       !process_group->right_receive_buffer) {
     fprintf(stderr, "Failed to allocate communication buffers\n");
     return PG_ERROR;
@@ -61,24 +56,20 @@ static int allocate_communication_buffers(pg_handle_internal_t *process_group) {
 static int register_communication_buffers(pg_handle_internal_t *process_group) {
   /* Register all buffers as memory regions */
   process_group->left_send_mr = rdma_register_memory_buffer(
-      &process_group->rdma_context, process_group->left_send_buffer,
-      process_group->total_buffer_size_bytes);
+      &process_group->rdma_context, process_group->left_send_buffer, process_group->total_buffer_size_bytes);
 
   process_group->left_receive_mr = rdma_register_memory_buffer(
-      &process_group->rdma_context, process_group->left_receive_buffer,
-      process_group->total_buffer_size_bytes);
+      &process_group->rdma_context, process_group->left_receive_buffer, process_group->total_buffer_size_bytes);
 
   process_group->right_send_mr = rdma_register_memory_buffer(
-      &process_group->rdma_context, process_group->right_send_buffer,
-      process_group->total_buffer_size_bytes);
+      &process_group->rdma_context, process_group->right_send_buffer, process_group->total_buffer_size_bytes);
 
   process_group->right_receive_mr = rdma_register_memory_buffer(
-      &process_group->rdma_context, process_group->right_receive_buffer,
-      process_group->total_buffer_size_bytes);
+      &process_group->rdma_context, process_group->right_receive_buffer, process_group->total_buffer_size_bytes);
 
   /* Check if all registrations succeeded */
-  if (!process_group->left_send_mr || !process_group->left_receive_mr ||
-      !process_group->right_send_mr || !process_group->right_receive_mr) {
+  if (!process_group->left_send_mr || !process_group->left_receive_mr || !process_group->right_send_mr ||
+      !process_group->right_receive_mr) {
     fprintf(stderr, "Failed to register communication buffers with RDMA\n");
     return PG_ERROR;
   }
@@ -92,31 +83,26 @@ static int register_communication_buffers(pg_handle_internal_t *process_group) {
  * @param process_group: Process group handle to create queue pairs for
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
-static int create_ring_topology_queue_pairs(
-    pg_handle_internal_t *process_group) {
+static int create_ring_topology_queue_pairs(pg_handle_internal_t *process_group) {
   /* Create queue pairs for left and right neighbors */
-  if (rdma_create_queue_pair(&process_group->rdma_context,
-                             &process_group->left_neighbor_qp) != PG_SUCCESS) {
+  if (rdma_create_queue_pair(&process_group->rdma_context, &process_group->left_neighbor_qp) != PG_SUCCESS) {
     fprintf(stderr, "Failed to create left neighbor queue pair\n");
     return PG_ERROR;
   }
 
-  if (rdma_create_queue_pair(&process_group->rdma_context,
-                             &process_group->right_neighbor_qp) != PG_SUCCESS) {
+  if (rdma_create_queue_pair(&process_group->rdma_context, &process_group->right_neighbor_qp) != PG_SUCCESS) {
     fprintf(stderr, "Failed to create right neighbor queue pair\n");
     return PG_ERROR;
   }
 
   /* Transition queue pairs to INIT state */
-  if (rdma_transition_qp_to_init(process_group->left_neighbor_qp,
-                                 process_group->rdma_context.ib_port_number) !=
+  if (rdma_transition_qp_to_init(process_group->left_neighbor_qp, process_group->rdma_context.ib_port_number) !=
       PG_SUCCESS) {
     fprintf(stderr, "Failed to initialize left neighbor queue pair\n");
     return PG_ERROR;
   }
 
-  if (rdma_transition_qp_to_init(process_group->right_neighbor_qp,
-                                 process_group->rdma_context.ib_port_number) !=
+  if (rdma_transition_qp_to_init(process_group->right_neighbor_qp, process_group->rdma_context.ib_port_number) !=
       PG_SUCCESS) {
     fprintf(stderr, "Failed to initialize right neighbor queue pair\n");
     return PG_ERROR;
@@ -132,14 +118,12 @@ static int create_ring_topology_queue_pairs(
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
 /* Forward declarations for helper functions */
-static int bootstrap_server_phase(pg_handle_internal_t *process_group,
-                                  rdma_qp_bootstrap_info_t *left_local_info,
+static int bootstrap_server_phase(pg_handle_internal_t *process_group, rdma_qp_bootstrap_info_t *left_local_info,
                                   rdma_qp_bootstrap_info_t *right_local_info,
                                   rdma_qp_bootstrap_info_t *left_remote_info,
                                   rdma_qp_bootstrap_info_t *right_remote_info);
 
-static int bootstrap_client_phase(pg_handle_internal_t *process_group,
-                                  rdma_qp_bootstrap_info_t *left_local_info,
+static int bootstrap_client_phase(pg_handle_internal_t *process_group, rdma_qp_bootstrap_info_t *left_local_info,
                                   rdma_qp_bootstrap_info_t *right_local_info,
                                   rdma_qp_bootstrap_info_t *left_remote_info,
                                   rdma_qp_bootstrap_info_t *right_remote_info);
@@ -147,8 +131,7 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
 /**
  * Bootstrap server phase - rank 0 collects QP info from all ranks
  */
-static int bootstrap_server_phase(pg_handle_internal_t *process_group,
-                                  rdma_qp_bootstrap_info_t *left_local_info,
+static int bootstrap_server_phase(pg_handle_internal_t *process_group, rdma_qp_bootstrap_info_t *left_local_info,
                                   rdma_qp_bootstrap_info_t *right_local_info,
                                   rdma_qp_bootstrap_info_t *left_remote_info,
                                   rdma_qp_bootstrap_info_t *right_remote_info) {
@@ -167,8 +150,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
 
   /* Enable address reuse */
   int opt = 1;
-  if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) <
-      0) {
+  if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
     perror("Failed to set socket options");
     close(server_socket);
     return PG_ERROR;
@@ -181,8 +163,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
   server_addr.sin_addr.s_addr = INADDR_ANY;
   server_addr.sin_port = htons(PG_DEFAULT_PORT);
 
-  if (bind(server_socket, (struct sockaddr *)&server_addr,
-           sizeof(server_addr)) < 0) {
+  if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
     perror("Failed to bind server socket");
     close(server_socket);
     return PG_ERROR;
@@ -198,10 +179,8 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
   printf("[Process 0] DEBUG: Server listening on port %d\n", PG_DEFAULT_PORT);
 
   /* Store QP info for all ranks - need both left and right QPs */
-  rdma_qp_bootstrap_info_t *left_qp_infos =
-      malloc(world_size * sizeof(rdma_qp_bootstrap_info_t));
-  rdma_qp_bootstrap_info_t *right_qp_infos =
-      malloc(world_size * sizeof(rdma_qp_bootstrap_info_t));
+  rdma_qp_bootstrap_info_t *left_qp_infos = malloc(world_size * sizeof(rdma_qp_bootstrap_info_t));
+  rdma_qp_bootstrap_info_t *right_qp_infos = malloc(world_size * sizeof(rdma_qp_bootstrap_info_t));
   if (!left_qp_infos || !right_qp_infos) {
     fprintf(stderr, "Failed to allocate memory for rank infos\n");
     close(server_socket);
@@ -230,9 +209,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
   while (connected_count < world_size) {
     /* Check for timeout */
     if (time(NULL) - start_time > BOOTSTRAP_TIMEOUT) {
-      printf(
-          "[Process 0] DEBUG: Bootstrap timeout - only %d/%d ranks connected\n",
-          connected_count, world_size);
+      printf("[Process 0] DEBUG: Bootstrap timeout - only %d/%d ranks connected\n", connected_count, world_size);
       break;
     }
 
@@ -247,8 +224,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
 
     /* Waiting for connections */
 
-    int select_result =
-        select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
+    int select_result = select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
     if (select_result < 0) {
       perror("select() failed");
       break;
@@ -259,11 +235,9 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
 
     if (FD_ISSET(server_socket, &read_fds)) {
       struct sockaddr_in client_addr;
-      socklen_t addr_len =
-          sizeof(client_addr); /* Reinitialize addr_len before each accept */
+      socklen_t addr_len = sizeof(client_addr); /* Reinitialize addr_len before each accept */
 
-      int client_socket =
-          accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
+      int client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
       if (client_socket < 0) {
         perror("accept() failed");
         continue;
@@ -271,26 +245,22 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
 
       /* Receive rank first, then both QP infos from the client */
       int client_rank;
-      if (recv(client_socket, &client_rank, sizeof(client_rank), 0) !=
-          sizeof(client_rank)) {
+      if (recv(client_socket, &client_rank, sizeof(client_rank), 0) != sizeof(client_rank)) {
         fprintf(stderr, "Failed to receive rank from client\n");
         close(client_socket);
         continue;
       }
 
       rdma_qp_bootstrap_info_t left_qp_info, right_qp_info;
-      if (recv(client_socket, &left_qp_info, sizeof(left_qp_info), 0) !=
-              sizeof(left_qp_info) ||
-          recv(client_socket, &right_qp_info, sizeof(right_qp_info), 0) !=
-              sizeof(right_qp_info)) {
+      if (recv(client_socket, &left_qp_info, sizeof(left_qp_info), 0) != sizeof(left_qp_info) ||
+          recv(client_socket, &right_qp_info, sizeof(right_qp_info), 0) != sizeof(right_qp_info)) {
         fprintf(stderr, "Failed to receive complete QP info from client\n");
         close(client_socket);
         continue;
       }
 
       /* Validate rank and avoid duplicates */
-      if (client_rank < 0 || client_rank >= world_size ||
-          connected_ranks[client_rank]) {
+      if (client_rank < 0 || client_rank >= world_size || connected_ranks[client_rank]) {
         fprintf(stderr, "Invalid or duplicate rank %d\n", client_rank);
         close(client_socket);
         continue;
@@ -300,8 +270,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
       left_qp_infos[client_rank] = left_qp_info;
       right_qp_infos[client_rank] = right_qp_info;
       connected_ranks[client_rank] = true;
-      client_sockets[client_rank] =
-          client_socket; /* Keep socket open for sending neighbor info */
+      client_sockets[client_rank] = client_socket; /* Keep socket open for sending neighbor info */
       connected_count++;
     }
   }
@@ -310,8 +279,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
   free(connected_ranks);
 
   if (connected_count < world_size) {
-    fprintf(stderr, "Bootstrap failed - only %d/%d ranks connected\n",
-            connected_count, world_size);
+    fprintf(stderr, "Bootstrap failed - only %d/%d ranks connected\n", connected_count, world_size);
     free(left_qp_infos);
     free(right_qp_infos);
     free(client_sockets);
@@ -340,18 +308,14 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
      * - right_neighbor_qp is for sending TO right neighbor → connect to their
      * left_qp (receive QP)
      */
-    rdma_qp_bootstrap_info_t left_remote_qp =
-        right_qp_infos[left_neighbor]; /* left neighbor's right QP (their send
-                                          QP) */
-    rdma_qp_bootstrap_info_t right_remote_qp =
-        left_qp_infos[right_neighbor]; /* right neighbor's left QP (their
-                                          receive QP) */
+    rdma_qp_bootstrap_info_t left_remote_qp = right_qp_infos[left_neighbor];  /* left neighbor's right QP (their send
+                                                                                 QP) */
+    rdma_qp_bootstrap_info_t right_remote_qp = left_qp_infos[right_neighbor]; /* right neighbor's left QP (their
+                                                                                 receive QP) */
 
     /* Send the correct remote QP info */
-    if (send(client_sockets[target_rank], &left_remote_qp,
-             sizeof(left_remote_qp), 0) != sizeof(left_remote_qp) ||
-        send(client_sockets[target_rank], &right_remote_qp,
-             sizeof(right_remote_qp), 0) != sizeof(right_remote_qp)) {
+    if (send(client_sockets[target_rank], &left_remote_qp, sizeof(left_remote_qp), 0) != sizeof(left_remote_qp) ||
+        send(client_sockets[target_rank], &right_remote_qp, sizeof(right_remote_qp), 0) != sizeof(right_remote_qp)) {
       fprintf(stderr, "Failed to send neighbor info to rank %d\n", target_rank);
       close(client_sockets[target_rank]);
       continue;
@@ -361,16 +325,13 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
   }
 
   /* Set up rank 0's own neighbor info */
-  int left_neighbor =
-      (world_size - 1) % world_size;   /* rank 3 for 4 processes */
-  int right_neighbor = 1 % world_size; /* rank 1 for 4 processes */
+  int left_neighbor = (world_size - 1) % world_size; /* rank 3 for 4 processes */
+  int right_neighbor = 1 % world_size;               /* rank 1 for 4 processes */
 
   /* Rank 0 connects: left_qp to rank 3's right_qp, right_qp to rank 1's left_qp
    */
-  *left_remote_info =
-      right_qp_infos[left_neighbor]; /* rank 3's right QP (their send QP) */
-  *right_remote_info =
-      left_qp_infos[right_neighbor]; /* rank 1's left QP (their receive QP) */
+  *left_remote_info = right_qp_infos[left_neighbor];  /* rank 3's right QP (their send QP) */
+  *right_remote_info = left_qp_infos[right_neighbor]; /* rank 1's left QP (their receive QP) */
 
   free(left_qp_infos);
   free(right_qp_infos);
@@ -381,8 +342,7 @@ static int bootstrap_server_phase(pg_handle_internal_t *process_group,
 /**
  * Bootstrap client phase - other ranks connect to rank 0
  */
-static int bootstrap_client_phase(pg_handle_internal_t *process_group,
-                                  rdma_qp_bootstrap_info_t *left_local_info,
+static int bootstrap_client_phase(pg_handle_internal_t *process_group, rdma_qp_bootstrap_info_t *left_local_info,
                                   rdma_qp_bootstrap_info_t *right_local_info,
                                   rdma_qp_bootstrap_info_t *left_remote_info,
                                   rdma_qp_bootstrap_info_t *right_remote_info) {
@@ -391,8 +351,7 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
 
   /* Connecting to rank 0 for bootstrap (quiet) */
 
-  int client_socket = pgnet_establish_tcp_connection(
-      process_group->hostname_list[0], PG_DEFAULT_PORT, 0);
+  int client_socket = pgnet_establish_tcp_connection(process_group->hostname_list[0], PG_DEFAULT_PORT, 0);
   if (client_socket < 0) {
     fprintf(stderr, "Failed to connect to rank 0\n");
     return PG_ERROR;
@@ -400,20 +359,16 @@ static int bootstrap_client_phase(pg_handle_internal_t *process_group,
 
   /* Send our rank first, then both QP infos to rank 0 */
   if (send(client_socket, &rank, sizeof(rank), 0) != sizeof(rank) ||
-      send(client_socket, left_local_info, sizeof(*left_local_info), 0) !=
-          sizeof(*left_local_info) ||
-      send(client_socket, right_local_info, sizeof(*right_local_info), 0) !=
-          sizeof(*right_local_info)) {
+      send(client_socket, left_local_info, sizeof(*left_local_info), 0) != sizeof(*left_local_info) ||
+      send(client_socket, right_local_info, sizeof(*right_local_info), 0) != sizeof(*right_local_info)) {
     fprintf(stderr, "Failed to send rank and QP info to rank 0\n");
     close(client_socket);
     return PG_ERROR;
   }
 
   /* Receive neighbor info from rank 0 */
-  if (recv(client_socket, left_remote_info, sizeof(*left_remote_info), 0) !=
-          sizeof(*left_remote_info) ||
-      recv(client_socket, right_remote_info, sizeof(*right_remote_info), 0) !=
-          sizeof(*right_remote_info)) {
+  if (recv(client_socket, left_remote_info, sizeof(*left_remote_info), 0) != sizeof(*left_remote_info) ||
+      recv(client_socket, right_remote_info, sizeof(*right_remote_info), 0) != sizeof(*right_remote_info)) {
     fprintf(stderr, "Failed to receive neighbor info from rank 0\n");
     close(client_socket);
     return PG_ERROR;
@@ -433,22 +388,16 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   rdma_qp_bootstrap_info_t left_remote_info, right_remote_info;
 
   /* Extract local QP information */
-  rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->left_neighbor_qp,
-                                 &left_local_info);
-  rdma_extract_qp_bootstrap_info(&process_group->rdma_context,
-                                 process_group->right_neighbor_qp,
-                                 &right_local_info);
+  rdma_extract_qp_bootstrap_info(&process_group->rdma_context, process_group->left_neighbor_qp, &left_local_info);
+  rdma_extract_qp_bootstrap_info(&process_group->rdma_context, process_group->right_neighbor_qp, &right_local_info);
 
   /* Bootstrap phase - exchange QP info */
   int result;
   if (rank == 0) {
-    result = bootstrap_server_phase(process_group, &left_local_info,
-                                    &right_local_info, &left_remote_info,
+    result = bootstrap_server_phase(process_group, &left_local_info, &right_local_info, &left_remote_info,
                                     &right_remote_info);
   } else {
-    result = bootstrap_client_phase(process_group, &left_local_info,
-                                    &right_local_info, &left_remote_info,
+    result = bootstrap_client_phase(process_group, &left_local_info, &right_local_info, &left_remote_info,
                                     &right_remote_info);
   }
 
@@ -459,25 +408,21 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
 
   /* Transition queue pairs to RTR state */
 
-  if (rdma_transition_qp_to_rtr(
-          process_group->left_neighbor_qp, &left_remote_info,
-          process_group->rdma_context.ib_port_number,
-          process_group->rdma_context.gid_index) != PG_SUCCESS ||
-      rdma_transition_qp_to_rtr(
-          process_group->right_neighbor_qp, &right_remote_info,
-          process_group->rdma_context.ib_port_number,
-          process_group->rdma_context.gid_index) != PG_SUCCESS) {
+  if (rdma_transition_qp_to_rtr(process_group->left_neighbor_qp, &left_remote_info,
+                                process_group->rdma_context.ib_port_number,
+                                process_group->rdma_context.gid_index) != PG_SUCCESS ||
+      rdma_transition_qp_to_rtr(process_group->right_neighbor_qp, &right_remote_info,
+                                process_group->rdma_context.ib_port_number,
+                                process_group->rdma_context.gid_index) != PG_SUCCESS) {
     fprintf(stderr, "Failed to transition queue pairs to RTR state\n");
     return PG_ERROR;
   }
 
   /* Transition queue pairs to RTS state */
 
-  if (rdma_transition_qp_to_rts(process_group->left_neighbor_qp,
-                                left_local_info.packet_sequence_number) !=
+  if (rdma_transition_qp_to_rts(process_group->left_neighbor_qp, left_local_info.packet_sequence_number) !=
           PG_SUCCESS ||
-      rdma_transition_qp_to_rts(process_group->right_neighbor_qp,
-                                right_local_info.packet_sequence_number) !=
+      rdma_transition_qp_to_rts(process_group->right_neighbor_qp, right_local_info.packet_sequence_number) !=
           PG_SUCCESS) {
     fprintf(stderr, "Failed to transition queue pairs to RTS state\n");
     return PG_ERROR;
@@ -492,8 +437,7 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
  * =============================================================================
  */
 
-int pg_initialize(const char *server_list_string,
-                  pg_handle_t *process_group_handle) {
+int pg_initialize(const char *server_list_string, pg_handle_t *process_group_handle) {
   PG_CHECK_NULL(server_list_string, "Server list string is NULL");
   PG_CHECK_NULL(process_group_handle, "Process group handle pointer is NULL");
 
@@ -505,8 +449,7 @@ int pg_initialize(const char *server_list_string,
   }
 
   /* Parse hostname list and determine process topology */
-  process_group->hostname_list = pgnet_parse_hostname_list(
-      server_list_string, &process_group->process_group_size);
+  process_group->hostname_list = pgnet_parse_hostname_list(server_list_string, &process_group->process_group_size);
   if (!process_group->hostname_list) {
     fprintf(stderr, "Failed to parse hostname list\n");
     free(process_group);
@@ -514,22 +457,19 @@ int pg_initialize(const char *server_list_string,
   }
 
   /* Determine this process's rank within the group */
-  process_group->process_rank = pgnet_determine_process_rank(
-      process_group->hostname_list, process_group->process_group_size);
+  process_group->process_rank =
+      pgnet_determine_process_rank(process_group->hostname_list, process_group->process_group_size);
   if (process_group->process_rank < 0) {
     fprintf(stderr, "Could not determine process rank\n");
-    pgnet_free_hostname_list(process_group->hostname_list,
-                             process_group->process_group_size);
+    pgnet_free_hostname_list(process_group->hostname_list, process_group->process_group_size);
     free(process_group);
     return PG_ERROR;
   }
 
   /* Initialize RDMA device context */
-  if (rdma_initialize_context(&process_group->rdma_context, NULL) !=
-      PG_SUCCESS) {
+  if (rdma_initialize_context(&process_group->rdma_context, NULL) != PG_SUCCESS) {
     fprintf(stderr, "Failed to initialize RDMA context\n");
-    pgnet_free_hostname_list(process_group->hostname_list,
-                             process_group->process_group_size);
+    pgnet_free_hostname_list(process_group->hostname_list, process_group->process_group_size);
     free(process_group);
     return PG_ERROR;
   }
@@ -568,8 +508,7 @@ int pg_initialize(const char *server_list_string,
 }
 
 int pg_cleanup(pg_handle_t process_group_handle) {
-  pg_handle_internal_t *process_group =
-      (pg_handle_internal_t *)process_group_handle;
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
   if (!process_group) {
     return PG_SUCCESS;
   }
@@ -594,8 +533,7 @@ int pg_cleanup(pg_handle_t process_group_handle) {
   free(process_group->right_receive_buffer);
 
   /* Free hostname list */
-  pgnet_free_hostname_list(process_group->hostname_list,
-                           process_group->process_group_size);
+  pgnet_free_hostname_list(process_group->hostname_list, process_group->process_group_size);
 
   /* Free the process group structure itself */
   free(process_group);
@@ -617,24 +555,19 @@ int pg_cleanup(pg_handle_t process_group_handle) {
  * @param data_size: Size of data to send/receive in bytes
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
-static int perform_ring_communication_step(pg_handle_internal_t *process_group,
-                                           void *send_data, void *receive_data,
+static int perform_ring_communication_step(pg_handle_internal_t *process_group, void *send_data, void *receive_data,
                                            size_t data_size) {
   int left_neighbor =
-      (process_group->process_rank - 1 + process_group->process_group_size) %
-      process_group->process_group_size;
-  int right_neighbor =
-      (process_group->process_rank + 1) % process_group->process_group_size;
+      (process_group->process_rank - 1 + process_group->process_group_size) % process_group->process_group_size;
+  int right_neighbor = (process_group->process_rank + 1) % process_group->process_group_size;
 
   /* Copy send data to RDMA send buffer */
   memcpy(process_group->right_send_buffer, send_data, data_size);
 
   /* Post receive request for incoming data from left neighbor */
-  if (rdma_post_receive_request(process_group->left_neighbor_qp,
-                                process_group->left_receive_buffer, data_size,
+  if (rdma_post_receive_request(process_group->left_neighbor_qp, process_group->left_receive_buffer, data_size,
                                 process_group->left_receive_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to post receive request\n",
-            process_group->process_rank);
+    fprintf(stderr, "[Process %d] ERROR: Failed to post receive request\n", process_group->process_rank);
     return PG_ERROR;
   }
 
@@ -646,17 +579,14 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
    * - This creates a cascade effect ensuring proper ordering */
   int base_delay_ms = 1500; /* Base delay for all processes */
   int rank_delay_ms = 200;  /* Additional delay per rank */
-  int total_delay_ms =
-      base_delay_ms + (process_group->process_rank * rank_delay_ms);
+  int total_delay_ms = base_delay_ms + (process_group->process_rank * rank_delay_ms);
 
   usleep(total_delay_ms * 1000); /* Convert to microseconds */
 
   /* Post send request to right neighbor */
-  if (rdma_post_send_request(process_group->right_neighbor_qp,
-                             process_group->right_send_buffer, data_size,
+  if (rdma_post_send_request(process_group->right_neighbor_qp, process_group->right_send_buffer, data_size,
                              process_group->right_send_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] ERROR: Failed to post send request\n",
-            process_group->process_rank);
+    fprintf(stderr, "[Process %d] ERROR: Failed to post send request\n", process_group->process_rank);
     return PG_ERROR;
   }
 
@@ -667,10 +597,8 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
 
   /* Poll for completions until both send and receive are done */
   while (!recv_completed || !send_completed) {
-    if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
-                                 &work_completion) != PG_SUCCESS) {
-      fprintf(stderr, "[Process %d] ERROR: Failed to complete RDMA operation\n",
-              process_group->process_rank);
+    if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+      fprintf(stderr, "[Process %d] ERROR: Failed to complete RDMA operation\n", process_group->process_rank);
       return PG_ERROR;
     }
 
@@ -695,11 +623,9 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group,
  * =============================================================================
  */
 
-int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
-                      void *receive_buffer, int element_count,
+int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
                       pg_datatype_t data_type, pg_operation_t reduction_op) {
-  pg_handle_internal_t *process_group =
-      (pg_handle_internal_t *)process_group_handle;
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
 
   PG_CHECK_NULL(process_group, "Process group handle is NULL");
   PG_CHECK_NULL(send_buffer, "Send buffer is NULL");
@@ -736,46 +662,37 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   }
 
   /* Perform reduce-scatter algorithm with (group_size - 1) steps */
-  for (int communication_step = 0; communication_step < group_size - 1;
-       communication_step++) {
+  for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
     /* Always reduce our own chunk index so final ownership is process_rank */
     int reduction_chunk_index = process_rank;
 
     /* Perform ring communication step */
-    if (perform_ring_communication_step(process_group,
-                                        process_group->right_send_buffer,
-                                        process_group->left_receive_buffer,
-                                        total_data_size) != PG_SUCCESS) {
+    if (perform_ring_communication_step(process_group, process_group->right_send_buffer,
+                                        process_group->left_receive_buffer, total_data_size) != PG_SUCCESS) {
       free(reduced_chunk_tmp);
       return PG_ERROR;
     }
 
     /* Apply reduction operation to the designated chunk */
-    char *local_chunk_ptr = (char *)process_group->right_send_buffer +
-                            (reduction_chunk_index * chunk_size_bytes);
-    char *remote_chunk_ptr = (char *)process_group->left_receive_buffer +
-                             (reduction_chunk_index * chunk_size_bytes);
+    char *local_chunk_ptr = (char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes);
+    char *remote_chunk_ptr = (char *)process_group->left_receive_buffer + (reduction_chunk_index * chunk_size_bytes);
 
     int chunk_element_count = (int)(chunk_size_bytes / element_size);
 
     /* Reduce into temp buffer to avoid being clobbered by the buffer swap */
     memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_size_bytes);
-    pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp,
-                                 remote_chunk_ptr, chunk_element_count,
-                                 data_type, reduction_op);
+    pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, remote_chunk_ptr, chunk_element_count, data_type,
+                                 reduction_op);
 
     /* Prepare data for next communication step */
-    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer,
-           total_data_size);
-    memcpy((char *)process_group->right_send_buffer +
-               (reduction_chunk_index * chunk_size_bytes),
-           reduced_chunk_tmp, chunk_size_bytes);
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_data_size);
+    memcpy((char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes), reduced_chunk_tmp,
+           chunk_size_bytes);
   }
 
   /* Extract this process's final result chunk (our own chunk index) */
   int my_chunk_index = process_rank;
-  char *my_result_chunk = (char *)process_group->right_send_buffer +
-                          (my_chunk_index * chunk_size_bytes);
+  char *my_result_chunk = (char *)process_group->right_send_buffer + (my_chunk_index * chunk_size_bytes);
   memcpy(receive_buffer, my_result_chunk, chunk_size_bytes);
 
   free(reduced_chunk_tmp);
@@ -783,11 +700,9 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer,
   return PG_SUCCESS;
 }
 
-int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
-                  void *receive_buffer, int element_count,
+int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
                   pg_datatype_t data_type) {
-  pg_handle_internal_t *process_group =
-      (pg_handle_internal_t *)process_group_handle;
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
 
   PG_CHECK_NULL(process_group, "Process group handle is NULL");
   PG_CHECK_NULL(send_buffer, "Send buffer is NULL");
@@ -815,17 +730,13 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
    * the local chunk to a temporary buffer before clearing receive_buffer. */
   void *tmp_chunk = malloc(chunk_size_bytes);
   if (!tmp_chunk) {
-    fprintf(
-        stderr,
-        "[Process %d] ERROR: Failed to allocate temp buffer for all-gather\n",
-        process_rank);
+    fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for all-gather\n", process_rank);
     return PG_ERROR;
   }
   memcpy(tmp_chunk, send_buffer, chunk_size_bytes);
 
   memset(receive_buffer, 0, total_data_size);
-  char *my_data_position =
-      (char *)receive_buffer + (process_rank * chunk_size_bytes);
+  char *my_data_position = (char *)receive_buffer + (process_rank * chunk_size_bytes);
   memcpy(my_data_position, tmp_chunk, chunk_size_bytes);
   free(tmp_chunk);
 
@@ -833,22 +744,17 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
   memcpy(process_group->right_send_buffer, receive_buffer, total_data_size);
 
   /* Perform all-gather algorithm with (group_size - 1) steps */
-  for (int communication_step = 0; communication_step < group_size - 1;
-       communication_step++) {
+  for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
     /* Perform ring communication step */
-    if (perform_ring_communication_step(process_group,
-                                        process_group->right_send_buffer,
-                                        process_group->left_receive_buffer,
-                                        total_data_size) != PG_SUCCESS) {
+    if (perform_ring_communication_step(process_group, process_group->right_send_buffer,
+                                        process_group->left_receive_buffer, total_data_size) != PG_SUCCESS) {
       return PG_ERROR;
     }
 
     /* Merge received data with local accumulated data */
     for (int chunk_index = 0; chunk_index < group_size; chunk_index++) {
-      char *local_chunk_ptr = (char *)process_group->right_send_buffer +
-                              (chunk_index * chunk_size_bytes);
-      char *remote_chunk_ptr = (char *)process_group->left_receive_buffer +
-                               (chunk_index * chunk_size_bytes);
+      char *local_chunk_ptr = (char *)process_group->right_send_buffer + (chunk_index * chunk_size_bytes);
+      char *remote_chunk_ptr = (char *)process_group->left_receive_buffer + (chunk_index * chunk_size_bytes);
 
       /* Check if remote chunk contains valid data (non-zero) */
       int remote_has_data = 0;
@@ -862,8 +768,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
       /* If remote has data and local doesn't, copy it over */
       if (remote_has_data) {
         int local_has_data = 0;
-        for (size_t byte_index = 0; byte_index < chunk_size_bytes;
-             byte_index++) {
+        for (size_t byte_index = 0; byte_index < chunk_size_bytes; byte_index++) {
           if (local_chunk_ptr[byte_index] != 0) {
             local_has_data = 1;
             break;
@@ -877,15 +782,12 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
     }
 
     /* Update working buffer with merged data */
-    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer,
-           total_data_size);
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_data_size);
 
     /* Restore any data we already had accumulated */
     for (int chunk_index = 0; chunk_index < group_size; chunk_index++) {
-      char *working_chunk_ptr = (char *)process_group->right_send_buffer +
-                                (chunk_index * chunk_size_bytes);
-      char *accumulated_chunk_ptr =
-          (char *)receive_buffer + (chunk_index * chunk_size_bytes);
+      char *working_chunk_ptr = (char *)process_group->right_send_buffer + (chunk_index * chunk_size_bytes);
+      char *accumulated_chunk_ptr = (char *)receive_buffer + (chunk_index * chunk_size_bytes);
 
       /* Check if we have accumulated data for this chunk */
       int accumulated_has_data = 0;
@@ -907,8 +809,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer,
   return PG_SUCCESS;
 }
 
-int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
-                  void *receive_buffer, int element_count,
+int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
                   pg_datatype_t data_type, pg_operation_t reduction_op) {
   PG_CHECK_NULL(process_group_handle, "Process group handle is NULL");
   PG_CHECK_NULL(send_buffer, "Send buffer is NULL");
@@ -921,18 +822,17 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
    */
 
   /* Phase 1: Reduce-scatter to get partial results */
-  if (pg_reduce_scatter(process_group_handle, send_buffer, receive_buffer,
-                        element_count, data_type, reduction_op) != PG_SUCCESS) {
+  if (pg_reduce_scatter(process_group_handle, send_buffer, receive_buffer, element_count, data_type, reduction_op) !=
+      PG_SUCCESS) {
     fprintf(stderr, "All-reduce failed during reduce-scatter phase\n");
     return PG_ERROR;
   }
 
   /* Phase 2: All-gather to distribute complete results */
-  pg_handle_internal_t *process_group =
-      (pg_handle_internal_t *)process_group_handle;
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
   int chunk_size = element_count / process_group->process_group_size;
   size_t element_size = pg_get_datatype_element_size(data_type);
-  
+
   /* Allocate temporary buffer for all-gather result */
   void *temp_buffer = malloc(element_count * element_size);
   if (!temp_buffer) {
@@ -940,8 +840,7 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
     return PG_ERROR;
   }
 
-  if (pg_all_gather(process_group_handle, receive_buffer, temp_buffer,
-                    element_count, data_type) != PG_SUCCESS) {
+  if (pg_all_gather(process_group_handle, receive_buffer, temp_buffer, element_count, data_type) != PG_SUCCESS) {
     fprintf(stderr, "All-reduce failed during all-gather phase\n");
     free(temp_buffer);
     return PG_ERROR;
@@ -959,8 +858,7 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer,
  * Sends small test messages to verify RDMA operations work
  */
 int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
-  pg_handle_internal_t *process_group =
-      (pg_handle_internal_t *)process_group_handle;
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
 
   if (!process_group) {
     fprintf(stderr, "Invalid process group handle\n");
@@ -971,8 +869,7 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
 
   /* Skip connectivity test for single-process groups */
   if (process_group->process_group_size == 1) {
-    printf("[Process %d] Single process group - connectivity test skipped\n",
-           process_group->process_rank);
+    printf("[Process %d] Single process group - connectivity test skipped\n", process_group->process_rank);
     return PG_SUCCESS;
   }
 
@@ -993,15 +890,11 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   struct ibv_mr *recv_mr;
 
   if (process_group->process_rank == 0) {
-    test_qp =
-        process_group
-            ->right_neighbor_qp; /* Connected to Process 1's left_neighbor_qp */
+    test_qp = process_group->right_neighbor_qp; /* Connected to Process 1's left_neighbor_qp */
     send_mr = process_group->right_send_mr;
     recv_mr = process_group->left_receive_mr;
-  } else { /* Process 1 */
-    test_qp =
-        process_group
-            ->left_neighbor_qp; /* Connected to Process 0's right_neighbor_qp */
+  } else {                                     /* Process 1 */
+    test_qp = process_group->left_neighbor_qp; /* Connected to Process 0's right_neighbor_qp */
     send_mr = process_group->right_send_mr;
     recv_mr = process_group->left_receive_mr;
   }
@@ -1018,10 +911,8 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   memset(test_receive_data, 0, test_data_size);
 
   /* Both processes post receive first */
-  if (rdma_post_receive_request(test_qp, test_receive_data, test_data_size,
-                                recv_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Failed to post receive request\n",
-            process_group->process_rank);
+  if (rdma_post_receive_request(test_qp, test_receive_data, test_data_size, recv_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post receive request\n", process_group->process_rank);
     return PG_ERROR;
   }
 
@@ -1029,30 +920,21 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   usleep(1000000);
 
   /* Both processes send to each other */
-  if (rdma_post_send_request(test_qp, test_send_data, test_data_size,
-                             send_mr) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Failed to post send request\n",
-            process_group->process_rank);
+  if (rdma_post_send_request(test_qp, test_send_data, test_data_size, send_mr) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Failed to post send request\n", process_group->process_rank);
     return PG_ERROR;
   }
 
   /* Wait for completions */
   struct ibv_wc work_completion;
-  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
-                               &work_completion) != PG_SUCCESS) {
-    fprintf(
-        stderr,
-        "[Process %d] Point-to-point test FAILED - receive completion failed\n",
-        process_group->process_rank);
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Point-to-point test FAILED - receive completion failed\n",
+            process_group->process_rank);
     return PG_ERROR;
   }
 
-  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue,
-                               &work_completion) != PG_SUCCESS) {
-    fprintf(
-        stderr,
-        "[Process %d] Point-to-point test FAILED - send completion failed\n",
-        process_group->process_rank);
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Point-to-point test FAILED - send completion failed\n", process_group->process_rank);
     return PG_ERROR;
   }
 
@@ -1063,9 +945,8 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
   for (size_t i = 0; i < test_data_size; i++) {
     char expected_value = (char)(expected_sender * 10 + i);
     if (test_receive_data[i] != expected_value) {
-      printf("[Process %d] Data mismatch at byte %zu: expected %d, got %d\n",
-             process_group->process_rank, i, expected_value,
-             test_receive_data[i]);
+      printf("[Process %d] Data mismatch at byte %zu: expected %d, got %d\n", process_group->process_rank, i,
+             expected_value, test_receive_data[i]);
       data_valid = 0;
       break;
     }

@@ -18,9 +18,9 @@ typedef struct {
   struct ibv_device *ib_device;       /* InfiniBand device handle */
   struct ibv_context *device_context; /* Device context for operations */
   struct ibv_pd *protection_domain;   /* Protection domain for memory regions */
-  struct ibv_cq *completion_queue; /* Completion queue for work completions */
-  int ib_port_number;              /* Active InfiniBand port number */
-  int gid_index;                   /* GID index for RoCE/GRH addressing */
+  struct ibv_cq *completion_queue;    /* Completion queue for work completions */
+  int ib_port_number;                 /* Active InfiniBand port number */
+  int gid_index;                      /* GID index for RoCE/GRH addressing */
 } rdma_context_t;
 
 /**
@@ -86,9 +86,7 @@ void rdma_cleanup_context(rdma_context_t *rdma_ctx);
  * @param buffer_size: Size of buffer in bytes
  * @return: Memory region handle on success, NULL on failure
  */
-struct ibv_mr *rdma_register_memory_buffer(rdma_context_t *rdma_ctx,
-                                           void *buffer_ptr,
-                                           size_t buffer_size);
+struct ibv_mr *rdma_register_memory_buffer(rdma_context_t *rdma_ctx, void *buffer_ptr, size_t buffer_size);
 
 /**
  * Deregister and release memory region
@@ -117,8 +115,7 @@ void rdma_deregister_memory_buffer(struct ibv_mr *memory_region);
  * @param queue_pair_ptr: Pointer to store created queue pair handle
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
-int rdma_create_queue_pair(rdma_context_t *rdma_ctx,
-                           struct ibv_qp **queue_pair_ptr);
+int rdma_create_queue_pair(rdma_context_t *rdma_ctx, struct ibv_qp **queue_pair_ptr);
 
 /**
  * Transition queue pair from RESET to INIT state
@@ -143,9 +140,8 @@ int rdma_transition_qp_to_init(struct ibv_qp *queue_pair, int ib_port_num);
  * @param ib_port_num: Local InfiniBand port number
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
-int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair,
-                              rdma_qp_bootstrap_info_t *remote_qp_info,
-                              int ib_port_num, int gid_index);
+int rdma_transition_qp_to_rtr(struct ibv_qp *queue_pair, rdma_qp_bootstrap_info_t *remote_qp_info, int ib_port_num,
+                              int gid_index);
 
 /**
  * Transition queue pair from RTR to Ready-to-Send (RTS) state
@@ -185,8 +181,7 @@ void rdma_destroy_queue_pair(struct ibv_qp *queue_pair);
  * @param queue_pair: Local queue pair to query
  * @param qp_info: Structure to populate with bootstrap information
  */
-void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
-                                    struct ibv_qp *queue_pair,
+void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx, struct ibv_qp *queue_pair,
                                     rdma_qp_bootstrap_info_t *qp_info);
 
 /*
@@ -207,8 +202,8 @@ void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx,
  * @param memory_region: Memory region handle for the buffer
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
-int rdma_post_receive_request(struct ibv_qp *queue_pair, void *buffer_ptr,
-                              size_t buffer_size, struct ibv_mr *memory_region);
+int rdma_post_receive_request(struct ibv_qp *queue_pair, void *buffer_ptr, size_t buffer_size,
+                              struct ibv_mr *memory_region);
 
 /**
  * Post send work request to queue pair
@@ -222,8 +217,7 @@ int rdma_post_receive_request(struct ibv_qp *queue_pair, void *buffer_ptr,
  * @param memory_region: Memory region handle for the buffer
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
-int rdma_post_send_request(struct ibv_qp *queue_pair, void *buffer_ptr,
-                           size_t data_size, struct ibv_mr *memory_region);
+int rdma_post_send_request(struct ibv_qp *queue_pair, void *buffer_ptr, size_t data_size, struct ibv_mr *memory_region);
 
 /**
  * Poll completion queue for work completion
@@ -236,8 +230,7 @@ int rdma_post_send_request(struct ibv_qp *queue_pair, void *buffer_ptr,
  * @param work_completion: Structure to store completion information
  * @return: PG_SUCCESS on successful completion, PG_ERROR on failure
  */
-int rdma_poll_for_completion(struct ibv_cq *completion_queue,
-                             struct ibv_wc *work_completion);
+int rdma_poll_for_completion(struct ibv_cq *completion_queue, struct ibv_wc *work_completion);
 
 /**
  * Poll completion queue for specific work completion by ID
@@ -250,8 +243,7 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue,
  * @param expected_wr_id: Work request ID to wait for
  * @return: PG_SUCCESS on successful completion, PG_ERROR on failure
  */
-int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue,
-                                      struct ibv_wc *work_completion,
+int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, struct ibv_wc *work_completion,
                                       uint64_t expected_wr_id);
 
 #endif /* RDMA_API_H */

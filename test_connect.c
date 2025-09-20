@@ -34,25 +34,22 @@
  * =============================================================================
  */
 
-#define MAX_HOSTS 64
+#define MAX_HOSTS        64
 #define MAX_HOSTNAME_LEN 256
-#define TEST_DATA_SIZE 1024
+#define TEST_DATA_SIZE   1024
 
 /**
  * Print usage information for the test program
  */
 static void print_usage(const char *program_name) {
-  printf("Usage: %s -myindex <index> -list <host1> <host2> <host3> ...\n",
-         program_name);
+  printf("Usage: %s -myindex <index> -list <host1> <host2> <host3> ...\n", program_name);
   printf("\n");
   printf("Parameters:\n");
   printf("  -myindex <index>  : Index of this process (0-based)\n");
   printf("  -list <hosts>     : Space-separated list of hostnames\n");
   printf("\n");
   printf("Example:\n");
-  printf(
-      "  %s -myindex 2 -list mlx-stud-01 mlx-stud-02 mlx-stud-03 mlx-stud-04\n",
-      program_name);
+  printf("  %s -myindex 2 -list mlx-stud-01 mlx-stud-02 mlx-stud-03 mlx-stud-04\n", program_name);
   printf("\n");
   printf("This runs the test as process 2 in a 4-process group.\n");
   printf("Each process must run this command with its own -myindex value.\n");
@@ -61,8 +58,7 @@ static void print_usage(const char *program_name) {
 /**
  * Parse command-line arguments and extract process index and host list
  */
-static int parse_arguments(int argc, char *argv[], int *my_index,
-                           char *host_list, size_t host_list_size) {
+static int parse_arguments(int argc, char *argv[], int *my_index, char *host_list, size_t host_list_size) {
   int index_found = 0;
   int list_found = 0;
 
@@ -136,8 +132,7 @@ static void initialize_test_data(double *data, int size, int process_rank) {
 /**
  * Verify all-reduce results
  */
-static int verify_all_reduce_results(double *result, int size,
-                                     int num_processes) {
+static int verify_all_reduce_results(double *result, int size, int num_processes) {
   int errors = 0;
 
   for (int i = 0; i < size; i++) {
@@ -149,8 +144,7 @@ static int verify_all_reduce_results(double *result, int size,
 
     if (fabs(result[i] - expected) > 1e-9) {
       if (errors < 10) {  // Limit error output
-        printf("Error at index %d: expected %.1f, got %.1f\n", i, expected,
-               result[i]);
+        printf("Error at index %d: expected %.1f, got %.1f\n", i, expected, result[i]);
       }
       errors++;
     }
@@ -168,8 +162,7 @@ static int verify_all_reduce_results(double *result, int size,
 /**
  * Test all-reduce collective operation
  */
-static int test_all_reduce(pg_handle_t process_group, int process_rank,
-                           int num_processes) {
+static int test_all_reduce(pg_handle_t process_group, int process_rank, int num_processes) {
   printf("[Process %d] Testing all-reduce operation...\n", process_rank);
 
   // Allocate test data
@@ -177,9 +170,7 @@ static int test_all_reduce(pg_handle_t process_group, int process_rank,
   double *recv_data = malloc(TEST_DATA_SIZE * sizeof(double));
 
   if (!send_data || !recv_data) {
-    fprintf(stderr,
-            "[Process %d] Failed to allocate memory for all-reduce test\n",
-            process_rank);
+    fprintf(stderr, "[Process %d] Failed to allocate memory for all-reduce test\n", process_rank);
     free(send_data);
     free(recv_data);
     return -1;
@@ -192,9 +183,7 @@ static int test_all_reduce(pg_handle_t process_group, int process_rank,
   double start_time = get_time_microseconds();
 
   // Perform all-reduce
-  int result =
-      pg_all_reduce(process_group, send_data, recv_data, TEST_DATA_SIZE,
-                    PG_DATATYPE_DOUBLE, PG_OPERATION_SUM);
+  int result = pg_all_reduce(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE, PG_OPERATION_SUM);
 
   double end_time = get_time_microseconds();
   double elapsed_ms = (end_time - start_time) / 1000.0;
@@ -207,17 +196,13 @@ static int test_all_reduce(pg_handle_t process_group, int process_rank,
   }
 
   // Verify results
-  int errors =
-      verify_all_reduce_results(recv_data, TEST_DATA_SIZE, num_processes);
+  int errors = verify_all_reduce_results(recv_data, TEST_DATA_SIZE, num_processes);
 
   if (errors == 0) {
-    printf("[Process %d] All-reduce PASSED (%.2f ms, %.2f MB/s)\n",
-           process_rank, elapsed_ms,
-           (TEST_DATA_SIZE * sizeof(double) * 2) /
-               (elapsed_ms * 1000.0));  // 2x for send+recv
+    printf("[Process %d] All-reduce PASSED (%.2f ms, %.2f MB/s)\n", process_rank, elapsed_ms,
+           (TEST_DATA_SIZE * sizeof(double) * 2) / (elapsed_ms * 1000.0));  // 2x for send+recv
   } else {
-    printf("[Process %d] All-reduce FAILED (%d errors)\n", process_rank,
-           errors);
+    printf("[Process %d] All-reduce FAILED (%d errors)\n", process_rank, errors);
   }
 
   // Print sample results
@@ -235,8 +220,7 @@ static int test_all_reduce(pg_handle_t process_group, int process_rank,
 /**
  * Test reduce-scatter collective operation
  */
-static int test_reduce_scatter(pg_handle_t process_group, int process_rank,
-                               int num_processes) {
+static int test_reduce_scatter(pg_handle_t process_group, int process_rank, int num_processes) {
   printf("[Process %d] Testing reduce-scatter operation...\n", process_rank);
 
   // Allocate test data
@@ -244,9 +228,7 @@ static int test_reduce_scatter(pg_handle_t process_group, int process_rank,
   double *recv_data = malloc((TEST_DATA_SIZE / num_processes) * sizeof(double));
 
   if (!send_data || !recv_data) {
-    fprintf(stderr,
-            "[Process %d] Failed to allocate memory for reduce-scatter test\n",
-            process_rank);
+    fprintf(stderr, "[Process %d] Failed to allocate memory for reduce-scatter test\n", process_rank);
     free(send_data);
     free(recv_data);
     return -1;
@@ -260,22 +242,19 @@ static int test_reduce_scatter(pg_handle_t process_group, int process_rank,
 
   // Perform reduce-scatter
   int result =
-      pg_reduce_scatter(process_group, send_data, recv_data, TEST_DATA_SIZE,
-                        PG_DATATYPE_DOUBLE, PG_OPERATION_SUM);
+      pg_reduce_scatter(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE, PG_OPERATION_SUM);
 
   double end_time = get_time_microseconds();
   double elapsed_ms = (end_time - start_time) / 1000.0;
 
   if (result != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Reduce-scatter operation failed\n",
-            process_rank);
+    fprintf(stderr, "[Process %d] Reduce-scatter operation failed\n", process_rank);
     free(send_data);
     free(recv_data);
     return -1;
   }
 
-  printf("[Process %d] Reduce-scatter PASSED (%.2f ms)\n", process_rank,
-         elapsed_ms);
+  printf("[Process %d] Reduce-scatter PASSED (%.2f ms)\n", process_rank, elapsed_ms);
 
   // Print sample results (this process's chunk)
   printf("[Process %d] My chunk results: ", process_rank);
@@ -293,8 +272,7 @@ static int test_reduce_scatter(pg_handle_t process_group, int process_rank,
 /**
  * Test all-gather collective operation
  */
-static int test_all_gather(pg_handle_t process_group, int process_rank,
-                           int num_processes) {
+static int test_all_gather(pg_handle_t process_group, int process_rank, int num_processes) {
   printf("[Process %d] Testing all-gather operation...\n", process_rank);
 
   int chunk_size = TEST_DATA_SIZE / num_processes;
@@ -304,9 +282,7 @@ static int test_all_gather(pg_handle_t process_group, int process_rank,
   double *recv_data = malloc(TEST_DATA_SIZE * sizeof(double));
 
   if (!send_data || !recv_data) {
-    fprintf(stderr,
-            "[Process %d] Failed to allocate memory for all-gather test\n",
-            process_rank);
+    fprintf(stderr, "[Process %d] Failed to allocate memory for all-gather test\n", process_rank);
     free(send_data);
     free(recv_data);
     return -1;
@@ -321,8 +297,7 @@ static int test_all_gather(pg_handle_t process_group, int process_rank,
   double start_time = get_time_microseconds();
 
   // Perform all-gather
-  int result = pg_all_gather(process_group, send_data, recv_data,
-                             TEST_DATA_SIZE, PG_DATATYPE_DOUBLE);
+  int result = pg_all_gather(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE);
 
   double end_time = get_time_microseconds();
   double elapsed_ms = (end_time - start_time) / 1000.0;
@@ -334,8 +309,7 @@ static int test_all_gather(pg_handle_t process_group, int process_rank,
     return -1;
   }
 
-  printf("[Process %d] All-gather PASSED (%.2f ms)\n", process_rank,
-         elapsed_ms);
+  printf("[Process %d] All-gather PASSED (%.2f ms)\n", process_rank, elapsed_ms);
 
   // Print sample results from each process's chunk
   printf("[Process %d] Gathered data: ", process_rank);
@@ -365,8 +339,7 @@ int main(int argc, char *argv[]) {
   printf("=== RDMA Process Group Test Program ===\n");
 
   // Parse command-line arguments
-  if (parse_arguments(argc, argv, &my_index, host_list, sizeof(host_list)) !=
-      0) {
+  if (parse_arguments(argc, argv, &my_index, host_list, sizeof(host_list)) != 0) {
     print_usage(argv[0]);
     return 1;
   }
@@ -395,8 +368,7 @@ int main(int argc, char *argv[]) {
 
   // Validate process index
   if (my_index < 0 || my_index >= num_processes) {
-    fprintf(stderr, "Error: Process index %d is out of range [0, %d]\n",
-            my_index, num_processes - 1);
+    fprintf(stderr, "Error: Process index %d is out of range [0, %d]\n", my_index, num_processes - 1);
     return 1;
   }
 
@@ -404,8 +376,7 @@ int main(int argc, char *argv[]) {
 
   // Initialize process group
   if (pg_initialize(host_list, &process_group) != PG_SUCCESS) {
-    fprintf(stderr, "[Process %d] Failed to initialize process group\n",
-            my_index);
+    fprintf(stderr, "[Process %d] Failed to initialize process group\n", my_index);
     return 1;
   }
 
@@ -455,12 +426,9 @@ int main(int argc, char *argv[]) {
 
   // Clean up process group
   if (pg_cleanup(process_group) != PG_SUCCESS) {
-    fprintf(stderr,
-            "[Process %d] Warning: Process group cleanup encountered errors\n",
-            my_index);
+    fprintf(stderr, "[Process %d] Warning: Process group cleanup encountered errors\n", my_index);
   } else {
-    printf("[Process %d] Process group cleanup completed successfully\n",
-           my_index);
+    printf("[Process %d] Process group cleanup completed successfully\n", my_index);
   }
 
   // Print final results
