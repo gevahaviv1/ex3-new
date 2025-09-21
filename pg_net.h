@@ -3,6 +3,12 @@
 
 #include "RDMA_api.h"
 
+struct pg_handle_internal;
+#ifndef PG_HANDLE_INTERNAL_FORWARD_DECL
+#define PG_HANDLE_INTERNAL_FORWARD_DECL
+typedef struct pg_handle_internal pg_handle_internal_t;
+#endif
+
 /**
  * Process Group Network Bootstrap Module
  *
@@ -98,5 +104,7 @@ int pgnet_establish_tcp_connection(const char *target_hostname, int tcp_port, in
  */
 int pgnet_exchange_rdma_bootstrap_info(int tcp_socket_fd, rdma_qp_bootstrap_info_t *local_qp_info,
                                        rdma_qp_bootstrap_info_t *remote_qp_info, int is_client_mode);
+
+int pg_exchange_allgather_mr(pg_handle_internal_t *pg, uint64_t local_base, uint32_t local_rkey, size_t nbytes);
 
 #endif /* PG_NET_H */

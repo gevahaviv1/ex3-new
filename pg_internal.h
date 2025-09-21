@@ -3,7 +3,12 @@
 
 #include "RDMA_api.h"
 #include "constants.h"
-#include "pg_net.h"
+
+struct pg_handle_internal;
+#ifndef PG_HANDLE_INTERNAL_FORWARD_DECL
+#define PG_HANDLE_INTERNAL_FORWARD_DECL
+typedef struct pg_handle_internal pg_handle_internal_t;
+#endif
 
 /**
  * Process Group Internal Implementation Details
@@ -43,7 +48,7 @@ typedef enum {
  * This structure is opaque to users and accessed only through the
  * public API functions.
  */
-typedef struct {
+struct pg_handle_internal {
   /* Process Group Topology Information */
   int process_rank;       /* This process's rank (0-based index) */
   int process_group_size; /* Total number of processes in group */
@@ -77,11 +82,22 @@ typedef struct {
   size_t chunk_bytes;             /* Chunk size for pipelined operations */
   int inflight;                   /* Maximum number of inflight operations */
 
+  /* Local final destination for collectives (must be an MR) */
+  struct ibv_mr *final_recv_mr;
+  uint64_t final_recv_base;  /* (uintptr_t)receive_buffer at call time */
+  size_t final_recv_bytes;
+
+  /* Neighbors' exposed buffers (we read from left, we let right read from us) */
+  uint64_t left_remote_base;
+  uint32_t left_remote_rkey;
+  uint64_t right_remote_base;
+  uint32_t right_remote_rkey;
+
   /* Remote Memory Region Information for Zero-Copy Operations */
   uint64_t *remote_buffer_addrs;  /* Array of remote buffer addresses for each process */
   uint32_t *remote_buffer_rkeys;  /* Array of remote buffer rkeys for each process */
   size_t remote_buffer_size;      /* Size of each remote buffer */
-} pg_handle_internal_t;
+};
 
 /*
  * =============================================================================

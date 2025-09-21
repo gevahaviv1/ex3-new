@@ -2,6 +2,7 @@
 #define CONSTANTS_H
 
 #include <infiniband/verbs.h>
+#include <stdint.h>
 
 /*
  * Process Group Network Configuration
@@ -106,5 +107,25 @@
 #define PG_MIN(a, b)                  ((a) < (b) ? (a) : (b))
 #define PG_MAX(a, b)                  ((a) > (b) ? (a) : (b))
 #define PG_ALIGN_UP(value, alignment) (((value) + (alignment) - 1) & ~((alignment) - 1))
+
+/* Work Request identification helpers */
+#define WRID_KIND_SHIFT 56
+#define WRK_READ 1u
+#define WRK_CTRL 2u
+#define WRK_CTRL_SEND 3u
+
+#define WRID_KIND(wrid) ((uint8_t)(((uint64_t)(wrid)) >> WRID_KIND_SHIFT))
+
+#define WRID_READ(idx, off) \
+  ((((uint64_t)WRK_READ) << WRID_KIND_SHIFT) | ((((uint64_t)(idx)) & 0x00FFFFFFULL) << 32) | \
+   (((uint64_t)(off)) & 0xFFFFFFFFULL))
+#define WRID_READ_INDEX(wrid) ((uint32_t)((((uint64_t)(wrid)) >> 32) & 0x00FFFFFFULL))
+#define WRID_READ_OFFSET(wrid) ((uint32_t)((uint64_t)(wrid) & 0xFFFFFFFFULL))
+
+#define WRID_CTRL(step) ((((uint64_t)WRK_CTRL) << WRID_KIND_SHIFT) | ((uint64_t)(step) & 0x00FFFFFFFFFFFFFFULL))
+#define WRID_CTRL_STEP(wrid) ((uint32_t)((uint64_t)(wrid) & 0xFFFFFFFFULL))
+
+#define WRID_CTRL_SEND(step) \
+  ((((uint64_t)WRK_CTRL_SEND) << WRID_KIND_SHIFT) | ((uint64_t)(step) & 0x00FFFFFFFFFFFFFFULL))
 
 #endif /* CONSTANTS_H */

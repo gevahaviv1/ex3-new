@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200112L
 
 #include "pg_net.h"
+#include "pg_internal.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -203,6 +204,235 @@ static int receive_data_reliably(int socket_fd, void *data_buffer, size_t data_s
   }
 
   return PG_SUCCESS;
+}
+
+typedef struct {
+  uint64_t base;
+  uint32_t rkey;
+  uint32_t reserved;
+  uint64_t bytes;
+} pg_mr_exchange_info_t;
+
+typedef struct {
+  int rank;
+  pg_mr_exchange_info_t info;
+} pg_mr_exchange_request_t;
+
+static void pgnet_apply_mr_table(pg_handle_internal_t *pg, const pg_mr_exchange_info_t *table, int world_size) {
+  if (!pg || !table || world_size <= 0) {
+    return;
+  }
+
+  if (pg->remote_buffer_addrs && pg->remote_buffer_rkeys) {
+    for (int i = 0; i < world_size; ++i) {
+      pg->remote_buffer_addrs[i] = table[i].base;
+      pg->remote_buffer_rkeys[i] = table[i].rkey;
+    }
+  }
+
+  int left_neighbor = (pg->process_rank - 1 + world_size) % world_size;
+  int right_neighbor = (pg->process_rank + 1) % world_size;
+
+  pg->left_remote_base = table[left_neighbor].base;
+  pg->left_remote_rkey = table[left_neighbor].rkey;
+  pg->right_remote_base = table[right_neighbor].base;
+  pg->right_remote_rkey = table[right_neighbor].rkey;
+}
+
+static int pgnet_exchange_allgather_mr_server(pg_handle_internal_t *pg, pg_mr_exchange_info_t local_info) {
+  PG_CHECK_NULL(pg, "Process group handle is NULL");
+
+  int world_size = pg->process_group_size;
+
+  pg_mr_exchange_info_t *mr_infos = calloc(world_size, sizeof(pg_mr_exchange_info_t));
+  int *client_sockets = calloc(world_size, sizeof(int));
+  if (!mr_infos || !client_sockets) {
+    fprintf(stderr, "Failed to allocate MR exchange buffers\n");
+    free(mr_infos);
+    free(client_sockets);
+    return PG_ERROR;
+  }
+
+  for (int i = 0; i < world_size; ++i) {
+    client_sockets[i] = -1;
+  }
+
+  mr_infos[0] = local_info;
+  mr_infos[0].reserved = 0;
+
+  int server_socket = create_tcp_socket();
+  if (server_socket < 0) {
+    free(mr_infos);
+    free(client_sockets);
+    return PG_ERROR;
+  }
+
+  struct sockaddr_in server_address;
+  memset(&server_address, 0, sizeof(server_address));
+  server_address.sin_family = AF_INET;
+  server_address.sin_addr.s_addr = INADDR_ANY;
+  server_address.sin_port = htons(PG_DEFAULT_PORT);
+
+  if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
+    perror("Failed to bind MR exchange server socket");
+    close(server_socket);
+    free(mr_infos);
+    free(client_sockets);
+    return PG_ERROR;
+  }
+
+  if (listen(server_socket, world_size) < 0) {
+    perror("Failed to listen on MR exchange server socket");
+    close(server_socket);
+    free(mr_infos);
+    free(client_sockets);
+    return PG_ERROR;
+  }
+
+  int connections_needed = world_size - 1;
+  while (connections_needed > 0) {
+    int client_socket = accept(server_socket, NULL, NULL);
+    if (client_socket < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      perror("Failed to accept MR exchange client");
+      close(server_socket);
+      for (int i = 0; i < world_size; ++i) {
+        if (client_sockets[i] >= 0) close(client_sockets[i]);
+      }
+      free(mr_infos);
+      free(client_sockets);
+      return PG_ERROR;
+    }
+
+    pg_mr_exchange_request_t request;
+    if (receive_data_reliably(client_socket, &request, sizeof(request)) != PG_SUCCESS) {
+      close(client_socket);
+      close(server_socket);
+      for (int i = 0; i < world_size; ++i) {
+        if (client_sockets[i] >= 0) close(client_sockets[i]);
+      }
+      free(mr_infos);
+      free(client_sockets);
+      return PG_ERROR;
+    }
+
+    int client_rank = request.rank;
+    if (client_rank <= 0 || client_rank >= world_size || client_sockets[client_rank] >= 0) {
+      fprintf(stderr, "Invalid MR exchange rank %d\n", client_rank);
+      close(client_socket);
+      continue;
+    }
+
+    mr_infos[client_rank] = request.info;
+    mr_infos[client_rank].reserved = 0;
+    client_sockets[client_rank] = client_socket;
+    connections_needed--;
+  }
+
+  close(server_socket);
+
+  size_t table_bytes = (size_t)world_size * sizeof(pg_mr_exchange_info_t);
+  for (int rank = 1; rank < world_size; ++rank) {
+    if (client_sockets[rank] < 0) {
+      continue;
+    }
+    if (send_data_reliably(client_sockets[rank], mr_infos, table_bytes) != PG_SUCCESS) {
+      close(client_sockets[rank]);
+      for (int i = 0; i < world_size; ++i) {
+        if (client_sockets[i] >= 0 && i != rank) close(client_sockets[i]);
+      }
+      free(mr_infos);
+      free(client_sockets);
+      return PG_ERROR;
+    }
+    close(client_sockets[rank]);
+    client_sockets[rank] = -1;
+  }
+
+  pgnet_apply_mr_table(pg, mr_infos, world_size);
+
+  free(mr_infos);
+  free(client_sockets);
+  return PG_SUCCESS;
+}
+
+static int pgnet_exchange_allgather_mr_client(pg_handle_internal_t *pg, pg_mr_exchange_info_t local_info) {
+  PG_CHECK_NULL(pg, "Process group handle is NULL");
+
+  int world_size = pg->process_group_size;
+
+  int socket_fd = pgnet_establish_tcp_connection(pg->hostname_list[0], PG_DEFAULT_PORT, 0);
+  if (socket_fd < 0) {
+    return PG_ERROR;
+  }
+
+  pg_mr_exchange_request_t request = {
+      .rank = pg->process_rank,
+      .info = local_info
+  };
+
+  if (send_data_reliably(socket_fd, &request, sizeof(request)) != PG_SUCCESS) {
+    close(socket_fd);
+    return PG_ERROR;
+  }
+
+  size_t table_bytes = (size_t)world_size * sizeof(pg_mr_exchange_info_t);
+  pg_mr_exchange_info_t *mr_infos = malloc(table_bytes);
+  if (!mr_infos) {
+    fprintf(stderr, "Failed to allocate MR exchange table\n");
+    close(socket_fd);
+    return PG_ERROR;
+  }
+
+  if (receive_data_reliably(socket_fd, mr_infos, table_bytes) != PG_SUCCESS) {
+    free(mr_infos);
+    close(socket_fd);
+    return PG_ERROR;
+  }
+
+  close(socket_fd);
+
+  pgnet_apply_mr_table(pg, mr_infos, world_size);
+
+  free(mr_infos);
+  return PG_SUCCESS;
+}
+
+int pg_exchange_allgather_mr(pg_handle_internal_t *pg, uint64_t local_base, uint32_t local_rkey, size_t nbytes) {
+  PG_CHECK_NULL(pg, "Process group handle is NULL");
+
+  pg->final_recv_base = local_base;
+  pg->final_recv_bytes = nbytes;
+
+  pg_mr_exchange_info_t local_info = {
+      .base = local_base,
+      .rkey = local_rkey,
+      .reserved = 0,
+      .bytes = nbytes
+  };
+
+  int world_size = pg->process_group_size;
+
+  if (pg->remote_buffer_addrs && pg->remote_buffer_rkeys && world_size > 0) {
+    pg->remote_buffer_addrs[pg->process_rank] = local_base;
+    pg->remote_buffer_rkeys[pg->process_rank] = local_rkey;
+  }
+
+  if (world_size <= 1) {
+    pg->left_remote_base = local_base;
+    pg->left_remote_rkey = local_rkey;
+    pg->right_remote_base = local_base;
+    pg->right_remote_rkey = local_rkey;
+    return PG_SUCCESS;
+  }
+
+  if (pg->process_rank == 0) {
+    return pgnet_exchange_allgather_mr_server(pg, local_info);
+  }
+
+  return pgnet_exchange_allgather_mr_client(pg, local_info);
 }
 
 /*

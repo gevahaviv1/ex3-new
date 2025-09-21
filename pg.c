@@ -389,6 +389,17 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context, process_group->left_neighbor_qp, &left_local_info);
   rdma_extract_qp_bootstrap_info(&process_group->rdma_context, process_group->right_neighbor_qp, &right_local_info);
 
+  /* Attach exposed buffer metadata for neighbors */
+  left_local_info.exposed_buffer_addr = (uint64_t)(uintptr_t)process_group->left_send_buffer;
+  left_local_info.exposed_buffer_rkey = process_group->left_send_mr ? process_group->left_send_mr->rkey : 0;
+  left_local_info.exposed_buffer_bytes = process_group->total_buffer_size_bytes;
+  left_local_info.reserved = 0;
+
+  right_local_info.exposed_buffer_addr = (uint64_t)(uintptr_t)process_group->right_send_buffer;
+  right_local_info.exposed_buffer_rkey = process_group->right_send_mr ? process_group->right_send_mr->rkey : 0;
+  right_local_info.exposed_buffer_bytes = process_group->total_buffer_size_bytes;
+  right_local_info.reserved = 0;
+
   /* Bootstrap phase - exchange QP info */
   int result;
   if (rank == 0) {
@@ -403,6 +414,12 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
     fprintf(stderr, "Bootstrap phase failed\n");
     return PG_ERROR;
   }
+
+  /* Cache neighbor exposed buffer information */
+  process_group->left_remote_base = left_remote_info.exposed_buffer_addr;
+  process_group->left_remote_rkey = left_remote_info.exposed_buffer_rkey;
+  process_group->right_remote_base = right_remote_info.exposed_buffer_addr;
+  process_group->right_remote_rkey = right_remote_info.exposed_buffer_rkey;
 
   /* Transition queue pairs to RTR state */
 
@@ -449,23 +466,17 @@ static int initialize_remote_memory_info(pg_handle_internal_t *process_group) {
   
   /* Set buffer size for remote operations */
   process_group->remote_buffer_size = process_group->total_buffer_size_bytes;
-  
+  process_group->final_recv_mr = process_group->right_receive_mr;
+
   /* Use right_receive_buffer as the target buffer for remote writes */
   uint64_t local_buffer_addr = (uint64_t)(uintptr_t)process_group->right_receive_buffer;
   uint32_t local_buffer_rkey = process_group->right_receive_mr->rkey;
-  
-  /* For now, use a simplified approach - assume all processes have the same buffer layout */
-  for (int i = 0; i < group_size; i++) {
-    if (i == process_rank) {
-      process_group->remote_buffer_addrs[i] = local_buffer_addr;
-      process_group->remote_buffer_rkeys[i] = local_buffer_rkey;
-    } else {
-      /* Placeholder - in a full implementation, this would be exchanged via TCP */
-      process_group->remote_buffer_addrs[i] = local_buffer_addr;
-      process_group->remote_buffer_rkeys[i] = local_buffer_rkey;
-    }
+
+  if (pg_exchange_allgather_mr(process_group, local_buffer_addr, local_buffer_rkey,
+                               process_group->remote_buffer_size) != PG_SUCCESS) {
+    return PG_ERROR;
   }
-  
+
   return PG_SUCCESS;
 }
 
@@ -575,6 +586,10 @@ int pg_cleanup(pg_handle_t process_group_handle) {
   rdma_deregister_memory_buffer(process_group->left_receive_mr);
   rdma_deregister_memory_buffer(process_group->right_send_mr);
   rdma_deregister_memory_buffer(process_group->right_receive_mr);
+  if (process_group->final_recv_mr && process_group->final_recv_mr != process_group->right_receive_mr) {
+    rdma_deregister_memory_buffer(process_group->final_recv_mr);
+  }
+  process_group->final_recv_mr = NULL;
 
   /* Clean up RDMA context */
   rdma_cleanup_context(&process_group->rdma_context);
@@ -868,55 +883,50 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void 
  * Eager all-gather implementation using SEND/RECV with memcpy for small messages
  */
 static int pg_all_gather_eager(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
-                               int element_count, pg_datatype_t data_type) {
+                               size_t total_bytes, size_t chunk_bytes) {
   int group_size = process_group->process_group_size;
   int process_rank = process_group->process_rank;
-  size_t element_size = pg_get_datatype_element_size(data_type);
-  size_t total_data_size = element_count * element_size;
-  size_t chunk_size_bytes = (element_count / group_size) * element_size;
 
-  /* Initialize receive buffer and place local data in correct position */
-  void *tmp_chunk = malloc(chunk_size_bytes);
+  if (chunk_bytes == 0) {
+    memset(receive_buffer, 0, total_bytes);
+    return PG_SUCCESS;
+  }
+
+  void *tmp_chunk = malloc(chunk_bytes);
   if (!tmp_chunk) {
     fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for all-gather\n", process_rank);
     return PG_ERROR;
   }
-  memcpy(tmp_chunk, send_buffer, chunk_size_bytes);
+  memmove(tmp_chunk, send_buffer, chunk_bytes);
 
-  memset(receive_buffer, 0, total_data_size);
-  char *my_data_position = (char *)receive_buffer + (process_rank * chunk_size_bytes);
-  memcpy(my_data_position, tmp_chunk, chunk_size_bytes);
+  memset(receive_buffer, 0, total_bytes);
+  char *my_data_position = (char *)receive_buffer + ((size_t)process_rank * chunk_bytes);
+  memcpy(my_data_position, tmp_chunk, chunk_bytes);
   free(tmp_chunk);
 
-  /* Copy initialized data to working buffer */
-  memcpy(process_group->right_send_buffer, receive_buffer, total_data_size);
+  memcpy(process_group->right_send_buffer, receive_buffer, total_bytes);
 
-  /* Perform all-gather algorithm with (group_size - 1) steps */
   for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
-    /* Perform ring communication step */
     if (perform_ring_communication_step(process_group, process_group->right_send_buffer,
-                                        process_group->left_receive_buffer, total_data_size) != PG_SUCCESS) {
+                                        process_group->left_receive_buffer, total_bytes) != PG_SUCCESS) {
       return PG_ERROR;
     }
 
-    /* Merge received data with local accumulated data */
     for (int chunk_index = 0; chunk_index < group_size; chunk_index++) {
-      char *local_chunk_ptr = (char *)process_group->right_send_buffer + (chunk_index * chunk_size_bytes);
-      char *remote_chunk_ptr = (char *)process_group->left_receive_buffer + (chunk_index * chunk_size_bytes);
+      char *local_chunk_ptr = (char *)process_group->right_send_buffer + (chunk_index * chunk_bytes);
+      char *remote_chunk_ptr = (char *)process_group->left_receive_buffer + (chunk_index * chunk_bytes);
 
-      /* Check if remote chunk contains valid data (non-zero) */
       int remote_has_data = 0;
-      for (size_t byte_index = 0; byte_index < chunk_size_bytes; byte_index++) {
+      for (size_t byte_index = 0; byte_index < chunk_bytes; byte_index++) {
         if (remote_chunk_ptr[byte_index] != 0) {
           remote_has_data = 1;
           break;
         }
       }
 
-      /* If remote has data and local doesn't, copy it over */
       if (remote_has_data) {
         int local_has_data = 0;
-        for (size_t byte_index = 0; byte_index < chunk_size_bytes; byte_index++) {
+        for (size_t byte_index = 0; byte_index < chunk_bytes; byte_index++) {
           if (local_chunk_ptr[byte_index] != 0) {
             local_has_data = 1;
             break;
@@ -924,22 +934,19 @@ static int pg_all_gather_eager(pg_handle_internal_t *process_group, void *send_b
         }
 
         if (!local_has_data) {
-          memcpy(local_chunk_ptr, remote_chunk_ptr, chunk_size_bytes);
+          memcpy(local_chunk_ptr, remote_chunk_ptr, chunk_bytes);
         }
       }
     }
 
-    /* Update working buffer with merged data */
-    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_data_size);
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_bytes);
 
-    /* Restore any data we already had accumulated */
     for (int chunk_index = 0; chunk_index < group_size; chunk_index++) {
-      char *working_chunk_ptr = (char *)process_group->right_send_buffer + (chunk_index * chunk_size_bytes);
-      char *accumulated_chunk_ptr = (char *)receive_buffer + (chunk_index * chunk_size_bytes);
+      char *working_chunk_ptr = (char *)process_group->right_send_buffer + (chunk_index * chunk_bytes);
+      char *accumulated_chunk_ptr = (char *)receive_buffer + (chunk_index * chunk_bytes);
 
-      /* Check if we have accumulated data for this chunk */
       int accumulated_has_data = 0;
-      for (size_t byte_index = 0; byte_index < chunk_size_bytes; byte_index++) {
+      for (size_t byte_index = 0; byte_index < chunk_bytes; byte_index++) {
         if (accumulated_chunk_ptr[byte_index] != 0) {
           accumulated_has_data = 1;
           break;
@@ -947,117 +954,209 @@ static int pg_all_gather_eager(pg_handle_internal_t *process_group, void *send_b
       }
 
       if (accumulated_has_data) {
-        memcpy(working_chunk_ptr, accumulated_chunk_ptr, chunk_size_bytes);
+        memcpy(working_chunk_ptr, accumulated_chunk_ptr, chunk_bytes);
       }
     }
   }
 
-  /* Copy final result to output buffer */
-  memcpy(receive_buffer, process_group->right_send_buffer, total_data_size);
+  memcpy(receive_buffer, process_group->right_send_buffer, total_bytes);
   return PG_SUCCESS;
 }
 
-/**
- * Pipelined all-gather implementation using RDMA Write operations for large messages
- */
-static int pg_all_gather_pipelined(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
-                                   int element_count, pg_datatype_t data_type) {
-  int group_size = process_group->process_group_size;
-  int process_rank = process_group->process_rank;
-  size_t element_size = pg_get_datatype_element_size(data_type);
-  size_t chunk_size_bytes = element_count * element_size;
-  size_t total_data_size = chunk_size_bytes * group_size;
-  
-  /* Calculate pipelining parameters */
-  size_t pipeline_chunk_size = PG_MIN(process_group->chunk_bytes, chunk_size_bytes);
-  int num_pipeline_chunks = (chunk_size_bytes + pipeline_chunk_size - 1) / pipeline_chunk_size;
-  int max_inflight = PG_MIN(process_group->inflight, num_pipeline_chunks);
-  
-  /* Initialize receive buffer - clear it and place local data */
-  memset(receive_buffer, 0, total_data_size);
-  char *my_data_position = (char *)receive_buffer + (process_rank * chunk_size_bytes);
-  memcpy(my_data_position, send_buffer, chunk_size_bytes);
-  
-  /* Synchronization barrier - ensure all processes have initialized their buffers */
-  usleep(100000); /* 100ms barrier */
-  
-  /* Phase 1: Each process writes its data to all other processes using RDMA Write */
-  for (int target_rank = 0; target_rank < group_size; target_rank++) {
-    if (target_rank == process_rank) {
-      continue; /* Skip writing to self */
-    }
-    
-    /* Calculate remote address for this process's data in target's buffer */
-    uint64_t remote_addr = process_group->remote_buffer_addrs[target_rank] + 
-                          (process_rank * chunk_size_bytes);
-    uint32_t remote_rkey = process_group->remote_buffer_rkeys[target_rank];
-    
-    /* Pipeline the write operation */
-    for (int pipeline_chunk = 0; pipeline_chunk < num_pipeline_chunks; pipeline_chunk += max_inflight) {
-      int chunks_this_batch = PG_MIN(max_inflight, num_pipeline_chunks - pipeline_chunk);
-      
-      /* Post RDMA writes for this batch */
-      for (int i = 0; i < chunks_this_batch; i++) {
-        int chunk_idx = pipeline_chunk + i;
-        size_t chunk_offset = chunk_idx * pipeline_chunk_size;
-        size_t this_chunk_size = PG_MIN(pipeline_chunk_size, chunk_size_bytes - chunk_offset);
-        
-        if (rdma_post_write_request(process_group->right_neighbor_qp,
-                                   (char *)send_buffer + chunk_offset,
-                                   this_chunk_size,
-                                   process_group->right_send_mr,
-                                   remote_addr + chunk_offset,
-                                   remote_rkey) != 0) {
-          return PG_ERROR;
-        }
-      }
-      
-      /* Wait for all writes in this batch to complete */
-      for (int i = 0; i < chunks_this_batch; i++) {
-        struct ibv_wc work_completion;
-        if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
-          return PG_ERROR;
-        }
-      }
-    }
-  }
-  
-  /* Phase 2: Send completion notification using inline control messages */
-  typedef struct {
-    int sender_rank;
-    int phase_complete;
-  } control_msg_t;
-  
-  control_msg_t control_msg = {
-    .sender_rank = process_rank,
-    .phase_complete = 1
-  };
-  
-  /* Send control message to right neighbor */
-  uint64_t control_wr_id = 100 + process_rank; /* Simple control message ID */
-  if (rdma_post_send_inline(process_group->right_neighbor_qp, &control_msg, 
-                           sizeof(control_msg), control_wr_id) != PG_SUCCESS) {
+typedef struct {
+  uint32_t step;
+  uint32_t chunk_index;
+} pg_control_msg_t;
+
+static int pg_post_control_receive(pg_handle_internal_t *process_group, pg_control_msg_t *slot, uint32_t step) {
+  struct ibv_sge sge = {
+      .addr = (uintptr_t)slot,
+      .length = sizeof(*slot),
+      .lkey = process_group->left_receive_mr->lkey};
+
+  struct ibv_recv_wr wr = {
+      .wr_id = WRID_CTRL(step),
+      .sg_list = &sge,
+      .num_sge = 1};
+
+  struct ibv_recv_wr *bad_wr = NULL;
+  int result = ibv_post_recv(process_group->left_neighbor_qp, &wr, &bad_wr);
+  if (result != 0) {
+    fprintf(stderr, "Failed to post control receive for step %u\n", step);
     return PG_ERROR;
   }
-  
-  /* Post receive for control message from left neighbor */
-  control_msg_t recv_control_msg;
-  if (rdma_post_receive_request(process_group->left_neighbor_qp, &recv_control_msg,
-                               sizeof(recv_control_msg), process_group->left_receive_mr) != PG_SUCCESS) {
+
+  return PG_SUCCESS;
+}
+
+static int pg_post_control_send(pg_handle_internal_t *process_group, uint32_t step, uint32_t chunk_index) {
+  pg_control_msg_t message = {
+      .step = step,
+      .chunk_index = chunk_index};
+
+  return rdma_post_send_inline(process_group->right_neighbor_qp, &message, sizeof(message), WRID_CTRL_SEND(step));
+}
+
+static int pg_process_next_completion(pg_handle_internal_t *process_group, uint8_t *control_ready, int total_steps,
+                                      size_t *outstanding_reads, size_t *completed_reads) {
+  struct ibv_wc work_completion;
+  if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
     return PG_ERROR;
   }
-  
-  /* Wait for both control operations to complete */
-  for (int i = 0; i < 2; i++) {
-    struct ibv_wc work_completion;
-    if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+
+  uint8_t kind = WRID_KIND(work_completion.wr_id);
+
+  if (work_completion.opcode == IBV_WC_RDMA_READ) {
+    if (kind != WRK_READ || !outstanding_reads || !completed_reads || *outstanding_reads == 0) {
+      fprintf(stderr, "Unexpected RDMA read completion\n");
+      return PG_ERROR;
+    }
+    (*outstanding_reads)--;
+    (*completed_reads)++;
+    return PG_SUCCESS;
+  }
+
+  if (work_completion.opcode == IBV_WC_RECV) {
+    if (kind != WRK_CTRL) {
+      fprintf(stderr, "Unexpected receive completion\n");
+      return PG_ERROR;
+    }
+    uint32_t step = WRID_CTRL_STEP(work_completion.wr_id);
+    if (step < (uint32_t)total_steps) {
+      control_ready[step] = 1;
+    }
+    return PG_SUCCESS;
+  }
+
+  if (work_completion.opcode == IBV_WC_SEND) {
+    return PG_SUCCESS;
+  }
+
+  fprintf(stderr, "Unexpected completion opcode %d\n", work_completion.opcode);
+  return PG_ERROR;
+}
+
+static int pg_wait_for_control(pg_handle_internal_t *process_group, uint32_t expected_step, uint8_t *control_ready,
+                               int total_steps) {
+  while (!control_ready[expected_step]) {
+    if (pg_process_next_completion(process_group, control_ready, total_steps, NULL, NULL) != PG_SUCCESS) {
       return PG_ERROR;
     }
   }
-  
-  /* Phase 3: Final synchronization barrier */
-  usleep(200000); /* 200ms barrier to ensure all writes are visible */
-  
+  return PG_SUCCESS;
+}
+
+static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *send_buffer, size_t total_bytes,
+                                   size_t chunk_bytes) {
+  const int group_size = process_group->process_group_size;
+  const int process_rank = process_group->process_rank;
+
+  if (!process_group->final_recv_mr) {
+    fprintf(stderr, "Final receive memory region is not registered\n");
+    return PG_ERROR;
+  }
+
+  if (chunk_bytes == 0) {
+    memset((void *)(uintptr_t)process_group->final_recv_base, 0, total_bytes);
+    return PG_SUCCESS;
+  }
+
+  if (chunk_bytes * (size_t)group_size != total_bytes) {
+    fprintf(stderr, "All-gather requires equal chunks across ranks\n");
+    return PG_ERROR;
+  }
+
+  if (process_group->left_remote_base == 0 || process_group->left_remote_rkey == 0) {
+    fprintf(stderr, "Left neighbor buffers are not exposed for RDMA read\n");
+    return PG_ERROR;
+  }
+
+  char *final_base = (char *)(uintptr_t)process_group->final_recv_base;
+  memmove(final_base + ((size_t)process_rank * chunk_bytes), send_buffer, chunk_bytes);
+
+  const int steps = group_size - 1;
+  if (steps <= 0) {
+    return PG_SUCCESS;
+  }
+
+  if (steps > PG_MAX_PROCESS_COUNT) {
+    fprintf(stderr, "Process group size exceeds supported control tracking\n");
+    return PG_ERROR;
+  }
+
+  pg_control_msg_t *control_slots = (pg_control_msg_t *)process_group->left_receive_buffer;
+  uint8_t control_ready[PG_MAX_PROCESS_COUNT] = {0};
+
+  for (int step = 0; step < steps; ++step) {
+    if (pg_post_control_receive(process_group, &control_slots[step], (uint32_t)step) != PG_SUCCESS) {
+      return PG_ERROR;
+    }
+  }
+
+  if (pg_post_control_send(process_group, 0, (uint32_t)process_rank) != PG_SUCCESS) {
+    return PG_ERROR;
+  }
+
+  size_t seg_bytes = PG_MIN(process_group->chunk_size_bytes, chunk_bytes);
+  if (seg_bytes == 0) {
+    seg_bytes = chunk_bytes;
+  }
+  int max_inflight = process_group->inflight > 0 ? process_group->inflight : 1;
+
+  for (int step = 1; step <= steps; ++step) {
+    if (pg_wait_for_control(process_group, (uint32_t)(step - 1), control_ready, steps) != PG_SUCCESS) {
+      return PG_ERROR;
+    }
+
+    int chunk_owner = (process_rank - step + group_size) % group_size;
+    size_t chunk_offset = (size_t)chunk_owner * chunk_bytes;
+
+    size_t total_segments = (chunk_bytes + seg_bytes - 1) / seg_bytes;
+    size_t posted_segments = 0;
+    size_t completed_segments = 0;
+    size_t outstanding_reads = 0;
+
+    while (completed_segments < total_segments) {
+      while (posted_segments < total_segments && outstanding_reads < (size_t)max_inflight) {
+        size_t segment_offset = posted_segments * seg_bytes;
+        size_t segment_length = PG_MIN(seg_bytes, chunk_bytes - segment_offset);
+        void *local_ptr = final_base + chunk_offset + segment_offset;
+        uint64_t remote_addr = process_group->left_remote_base + chunk_offset + segment_offset;
+        uint64_t wr_id = WRID_READ(chunk_owner, (uint32_t)segment_offset);
+
+        if (rdma_post_read_request(process_group->left_neighbor_qp, local_ptr, segment_length,
+                                   process_group->final_recv_mr, remote_addr, process_group->left_remote_rkey,
+                                   wr_id, 1) != 0) {
+          return PG_ERROR;
+        }
+
+        posted_segments++;
+        outstanding_reads++;
+      }
+
+      if (outstanding_reads == 0) {
+        fprintf(stderr, "RDMA read pipeline stalled\n");
+        return PG_ERROR;
+      }
+
+      if (pg_process_next_completion(process_group, control_ready, steps, &outstanding_reads, &completed_segments) !=
+          PG_SUCCESS) {
+        return PG_ERROR;
+      }
+    }
+
+    if (completed_segments != total_segments) {
+      fprintf(stderr, "Incomplete RDMA reads for chunk %d\n", chunk_owner);
+      return PG_ERROR;
+    }
+
+    if (step < steps) {
+      if (pg_post_control_send(process_group, (uint32_t)step, (uint32_t)chunk_owner) != PG_SUCCESS) {
+        return PG_ERROR;
+      }
+    }
+  }
+
   return PG_SUCCESS;
 }
 
@@ -1077,21 +1176,60 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
   /* Handle single-process case */
   if (group_size == 1) {
     size_t element_size = pg_get_datatype_element_size(data_type);
-    memcpy(receive_buffer, send_buffer, element_count * element_size);
+    memmove(receive_buffer, send_buffer, (size_t)element_count * element_size);
     return PG_SUCCESS;
   }
 
-  size_t element_size = pg_get_datatype_element_size(data_type);
-  size_t total_data_size = element_count * element_size;
-  
-  /* Dispatch based on message size */
-  if (total_data_size <= process_group->eager_max) {
-    /* Use eager path for small messages */
-    return pg_all_gather_eager(process_group, send_buffer, receive_buffer, element_count, data_type);
-  } else {
-    /* Use pipelined RDMA path for large messages */
-    return pg_all_gather_pipelined(process_group, send_buffer, receive_buffer, element_count, data_type);
+  size_t elem_sz = pg_get_datatype_element_size(data_type);
+  size_t total_bytes = (size_t)element_count * elem_sz;
+
+  if (total_bytes == 0) {
+    return PG_SUCCESS;
   }
+
+  if ((size_t)group_size == 0 || total_bytes % (size_t)group_size != 0) {
+    fprintf(stderr, "All-gather requires total data divisible by process count\n");
+    return PG_ERROR;
+  }
+
+  size_t chunk_bytes = total_bytes / (size_t)group_size;
+
+  uint64_t recv_base = (uint64_t)(uintptr_t)receive_buffer;
+  int needs_registration = 0;
+
+  if (!process_group->final_recv_mr) {
+    needs_registration = 1;
+  } else if (process_group->final_recv_base != recv_base || process_group->final_recv_bytes < total_bytes) {
+    needs_registration = 1;
+  }
+
+  if (needs_registration) {
+    if (process_group->final_recv_mr && process_group->final_recv_mr != process_group->right_receive_mr) {
+      rdma_deregister_memory_buffer(process_group->final_recv_mr);
+    }
+
+    struct ibv_mr *new_mr =
+        rdma_register_memory_buffer(&process_group->rdma_context, receive_buffer, total_bytes);
+    if (!new_mr) {
+      fprintf(stderr, "Failed to register final receive buffer for all-gather\n");
+      return PG_ERROR;
+    }
+    process_group->final_recv_mr = new_mr;
+  }
+
+  process_group->final_recv_base = recv_base;
+  process_group->final_recv_bytes = total_bytes;
+
+  if (pg_exchange_allgather_mr(process_group, process_group->final_recv_base, process_group->final_recv_mr->rkey,
+                               total_bytes) != PG_SUCCESS) {
+    return PG_ERROR;
+  }
+
+  if (total_bytes <= process_group->eager_max) {
+    return pg_all_gather_eager(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
+  }
+
+  return pg_all_gather_zero_copy(process_group, send_buffer, total_bytes, chunk_bytes);
 }
 
 int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,

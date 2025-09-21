@@ -1,4 +1,5 @@
 #define _DEFAULT_SOURCE
+#include <errno.h>
 #include <infiniband/verbs.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -384,6 +385,10 @@ void rdma_extract_qp_bootstrap_info(rdma_context_t *rdma_ctx, struct ibv_qp *que
   qp_info->queue_pair_number = queue_pair->qp_num;
   qp_info->local_identifier = (query_result == 0) ? port_attributes.lid : 0;
   qp_info->packet_sequence_number = generate_random_psn();
+  qp_info->exposed_buffer_addr = 0;
+  qp_info->exposed_buffer_rkey = 0;
+  qp_info->reserved = 0;
+  qp_info->exposed_buffer_bytes = 0;
 
   /* Query GID (Global Identifier) */
   int gid_result = ibv_query_gid(rdma_ctx->device_context, rdma_ctx->ib_port_number, rdma_ctx->gid_index,
@@ -616,27 +621,29 @@ int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data
  * =============================================================================
  */
 
-int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size, 
-                           struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey) {
+int rdma_post_write_request(struct ibv_qp *qp,
+                            void *local_buf, size_t size, struct ibv_mr *local_mr,
+                            uint64_t remote_addr, uint32_t rkey,
+                            uint64_t wr_id, int signaled) {
   if (!qp || !local_buf || !local_mr || size == 0) {
+    errno = EINVAL;
+    perror("rdma_post_write_request");
     return -1;
   }
 
-  /* Configure scatter-gather element for local buffer */
   struct ibv_sge sge = {
       .addr = (uintptr_t)local_buf,
       .length = size,
       .lkey = local_mr->lkey
   };
 
-  /* Configure RDMA write work request */
   struct ibv_send_wr wr = {
-      .wr_id = 0,  /* No work request ID tracking */
+      .wr_id = wr_id,
       .next = NULL,
       .sg_list = &sge,
       .num_sge = 1,
       .opcode = IBV_WR_RDMA_WRITE,
-      .send_flags = IBV_SEND_SIGNALED,
+      .send_flags = 0,
       .wr = {
           .rdma = {
               .remote_addr = remote_addr,
@@ -645,34 +652,45 @@ int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size,
       }
   };
 
-  /* Post the write request */
-  struct ibv_send_wr *bad_wr;
+  if (signaled) {
+    wr.send_flags |= IBV_SEND_SIGNALED;
+  }
+
+  struct ibv_send_wr *bad_wr = NULL;
   int result = ibv_post_send(qp, &wr, &bad_wr);
 
-  return (result == 0) ? 0 : -1;
-}
-
-int rdma_post_read_request(struct ibv_qp *qp, void *local_buf, size_t size,
-                          struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey) {
-  if (!qp || !local_buf || !local_mr || size == 0) {
+  if (result != 0) {
+    errno = result;
+    perror("ibv_post_send (write)");
     return -1;
   }
 
-  /* Configure scatter-gather element for local buffer */
+  return 0;
+}
+
+int rdma_post_read_request(struct ibv_qp *qp,
+                           void *local_buf, size_t size, struct ibv_mr *local_mr,
+                           uint64_t remote_addr, uint32_t rkey,
+                           uint64_t wr_id, int signaled) {
+  if (!qp || !local_buf || !local_mr || size == 0) {
+    errno = EINVAL;
+    perror("rdma_post_read_request");
+    return -1;
+  }
+
   struct ibv_sge sge = {
       .addr = (uintptr_t)local_buf,
       .length = size,
       .lkey = local_mr->lkey
   };
 
-  /* Configure RDMA read work request */
   struct ibv_send_wr wr = {
-      .wr_id = 0,  /* No work request ID tracking */
+      .wr_id = wr_id,
       .next = NULL,
       .sg_list = &sge,
       .num_sge = 1,
       .opcode = IBV_WR_RDMA_READ,
-      .send_flags = IBV_SEND_SIGNALED,
+      .send_flags = 0,
       .wr = {
           .rdma = {
               .remote_addr = remote_addr,
@@ -681,9 +699,18 @@ int rdma_post_read_request(struct ibv_qp *qp, void *local_buf, size_t size,
       }
   };
 
-  /* Post the read request */
-  struct ibv_send_wr *bad_wr;
+  if (signaled) {
+    wr.send_flags |= IBV_SEND_SIGNALED;
+  }
+
+  struct ibv_send_wr *bad_wr = NULL;
   int result = ibv_post_send(qp, &wr, &bad_wr);
 
-  return (result == 0) ? 0 : -1;
+  if (result != 0) {
+    errno = result;
+    perror("ibv_post_send (read)");
+    return -1;
+  }
+
+  return 0;
 }

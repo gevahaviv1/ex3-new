@@ -27,7 +27,8 @@ typedef struct {
  * Queue Pair Bootstrap Information
  *
  * Contains the essential information needed to establish an RDMA connection
- * between two queue pairs. This data is exchanged during the bootstrap phase
+ * between two queue pairs, as well as exposed buffer metadata required for
+ * one-sided operations. This data is exchanged during the bootstrap phase
  * via TCP before transitioning queue pairs to Ready-to-Receive (RTR) state.
  */
 typedef struct {
@@ -35,6 +36,10 @@ typedef struct {
   uint16_t local_identifier;       /* Local LID for addressing */
   union ibv_gid global_identifier; /* Global identifier for routing */
   uint32_t packet_sequence_number; /* Starting packet sequence number */
+  uint64_t exposed_buffer_addr;    /* Base address of exposed buffer */
+  uint32_t exposed_buffer_rkey;    /* Remote key for exposed buffer */
+  uint32_t reserved;               /* Reserved for alignment/future use */
+  uint64_t exposed_buffer_bytes;   /* Size of exposed buffer in bytes */
 } rdma_qp_bootstrap_info_t;
 
 /*
@@ -264,7 +269,7 @@ int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data
 /**
  * Simplified RDMA write helper for large-message zero-copy
  *
- * Posts an RDMA write work request without work request ID tracking.
+ * Posts an RDMA write work request with optional completion tracking.
  * Constructs WR with IBV_WR_RDMA_WRITE opcode and posts with ibv_post_send.
  *
  * @param qp: Queue pair to send write request on
@@ -273,15 +278,19 @@ int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data
  * @param local_mr: Memory region handle for the local buffer
  * @param remote_addr: Remote memory address to write to
  * @param rkey: Remote key for accessing remote memory
+ * @param wr_id: Work request identifier for completion tracking
+ * @param signaled: Non-zero to request a completion notification
  * @return: 0 on success, -1 on error
  */
-int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size, 
-                           struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey);
+int rdma_post_write_request(struct ibv_qp *qp,
+                            void *local_buf, size_t size, struct ibv_mr *local_mr,
+                            uint64_t remote_addr, uint32_t rkey,
+                            uint64_t wr_id, int signaled);
 
 /**
  * Simplified RDMA read helper for large-message zero-copy
  *
- * Posts an RDMA read work request without work request ID tracking.
+ * Posts an RDMA read work request with optional completion tracking.
  * Constructs WR with IBV_WR_RDMA_READ opcode and posts with ibv_post_send.
  *
  * @param qp: Queue pair to send read request on
@@ -290,9 +299,13 @@ int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size,
  * @param local_mr: Memory region handle for the local buffer
  * @param remote_addr: Remote memory address to read from
  * @param rkey: Remote key for accessing remote memory
+ * @param wr_id: Work request identifier for completion tracking
+ * @param signaled: Non-zero to request a completion notification
  * @return: 0 on success, -1 on error
  */
-int rdma_post_read_request(struct ibv_qp *qp, void *local_buf, size_t size,
-                          struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey);
+int rdma_post_read_request(struct ibv_qp *qp,
+                           void *local_buf, size_t size, struct ibv_mr *local_mr,
+                           uint64_t remote_addr, uint32_t rkey,
+                           uint64_t wr_id, int signaled);
 
 #endif /* RDMA_API_H */
