@@ -640,18 +640,6 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group, 
     return PG_ERROR;
   }
 
-  /* Synchronization barrier: ensure all processes have posted receives */
-
-  /* Implement rank-based staggered synchronization to prevent race conditions:
-   * - All processes wait base time to post receives
-   * - Higher ranks wait additional time to ensure lower ranks are ready
-   * - This creates a cascade effect ensuring proper ordering */
-  int base_delay_ms = 1500; /* Base delay for all processes */
-  int rank_delay_ms = 200;  /* Additional delay per rank */
-  int total_delay_ms = base_delay_ms + (process_group->process_rank * rank_delay_ms);
-
-  usleep(total_delay_ms * 1000); /* Convert to microseconds */
-
   /* Post send request to right neighbor */
   if (rdma_post_send_request(process_group->right_neighbor_qp, process_group->right_send_buffer, data_size,
                              process_group->right_send_mr) != PG_SUCCESS) {
@@ -855,9 +843,6 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void 
   PG_CHECK_NULL(receive_buffer, "Receive buffer is NULL");
 
   int group_size = process_group->process_group_size;
-
-  /* Global synchronization barrier before starting collective operation */
-  usleep(2000000); /* 2 second initial barrier for all processes */
 
   /* Handle single-process case */
   if (group_size == 1) {
@@ -1170,9 +1155,6 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
 
   int group_size = process_group->process_group_size;
 
-  /* Global synchronization barrier before starting collective operation */
-  usleep(2000000); /* 2 second initial barrier for all processes */
-
   /* Handle single-process case */
   if (group_size == 1) {
     size_t element_size = pg_get_datatype_element_size(data_type);
@@ -1338,8 +1320,8 @@ int pg_test_rdma_connectivity(pg_handle_t process_group_handle) {
     return PG_ERROR;
   }
 
-  /* Synchronization barrier */
-  usleep(1000000);
+  /* Brief pause to ensure peer has its receive ready */
+  usleep(1000);
 
   /* Both processes send to each other */
   if (rdma_post_send_request(test_qp, test_send_data, test_data_size, send_mr) != PG_SUCCESS) {

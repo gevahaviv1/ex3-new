@@ -42,15 +42,15 @@
  * Buffer Management
  * Memory allocation and data transfer configuration
  */
-#define PG_BUFFER_SIZE_BYTES (1024 * 1024) /* 1MB buffer for collective operations */
-#define PG_CHUNK_SIZE_BYTES  4096          /* 4KB chunks for pipelined transfers */
+#define PG_BUFFER_SIZE_BYTES (32 * 1024 * 1024) /* 32MB buffer for collective operations */
+#define PG_CHUNK_SIZE_BYTES  (256 * 1024)        /* 256KB chunks for pipelined transfers */
 
 /*
  * Pipelining Configuration
  * Parameters for overlapping communication and computation
  */
-#define PG_DEFAULT_EAGER_MAX 8192  /* Maximum message size for eager protocol */
-#define PG_DEFAULT_CHUNK_BYTES 4096 /* Default chunk size for pipelining */
+#define PG_DEFAULT_EAGER_MAX (128 * 1024)  /* Maximum message size for eager protocol */
+#define PG_DEFAULT_CHUNK_BYTES (256 * 1024) /* Default chunk size for pipelining */
 #define PG_DEFAULT_INFLIGHT 4      /* Default maximum inflight operations */
 
 /*

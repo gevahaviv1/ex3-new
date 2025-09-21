@@ -37,7 +37,7 @@
 
 #define MAX_HOSTS        64
 #define MAX_HOSTNAME_LEN 256
-#define TEST_DATA_SIZE   1024
+#define TEST_DATA_SIZE   (1024 * 1024)  /* Number of doubles per collective test (≈8 MiB) */
 
 /**
  * Print usage information for the test program
@@ -180,6 +180,18 @@ static int test_all_reduce(pg_handle_t process_group, int process_rank, int num_
   // Initialize test data
   initialize_test_data(send_data, TEST_DATA_SIZE, process_rank);
 
+  // Warm up once to avoid cold-start effects on the timing run
+  if (pg_all_reduce(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE, PG_OPERATION_SUM) !=
+      PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] All-reduce warm-up failed\n", process_rank);
+    free(send_data);
+    free(recv_data);
+    return -1;
+  }
+
+  initialize_test_data(send_data, TEST_DATA_SIZE, process_rank);
+  memset(recv_data, 0, TEST_DATA_SIZE * sizeof(double));
+
   // Measure performance
   double start_time = get_time_microseconds();
 
@@ -200,8 +212,10 @@ static int test_all_reduce(pg_handle_t process_group, int process_rank, int num_
   int errors = verify_all_reduce_results(recv_data, TEST_DATA_SIZE, num_processes);
 
   if (errors == 0) {
-    printf("[Process %d] All-reduce PASSED (%.2f ms, %.2f MB/s)\n", process_rank, elapsed_ms,
-           (TEST_DATA_SIZE * sizeof(double) * 2) / (elapsed_ms * 1000.0));  // 2x for send+recv
+    double bytes_transferred = (double)TEST_DATA_SIZE * sizeof(double) * 2.0;  // 2x for send+recv
+    double seconds = elapsed_ms / 1000.0;
+    double throughput_mbps = seconds > 0.0 ? (bytes_transferred * 8.0) / (seconds * 1e6) : 0.0;
+    printf("[Process %d] All-reduce PASSED (%.2f ms, %.2f Mb/s)\n", process_rank, elapsed_ms, throughput_mbps);
   } else {
     printf("[Process %d] All-reduce FAILED (%d errors)\n", process_rank, errors);
   }
@@ -237,6 +251,17 @@ static int test_reduce_scatter(pg_handle_t process_group, int process_rank, int 
 
   // Initialize test data
   initialize_test_data(send_data, TEST_DATA_SIZE, process_rank);
+
+  if (pg_reduce_scatter(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE, PG_OPERATION_SUM) !=
+      PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Reduce-scatter warm-up failed\n", process_rank);
+    free(send_data);
+    free(recv_data);
+    return -1;
+  }
+
+  initialize_test_data(send_data, TEST_DATA_SIZE, process_rank);
+  memset(recv_data, 0, (TEST_DATA_SIZE / num_processes) * sizeof(double));
 
   // Measure performance
   double start_time = get_time_microseconds();
@@ -293,6 +318,18 @@ static int test_all_gather(pg_handle_t process_group, int process_rank, int num_
   for (int i = 0; i < chunk_size; i++) {
     send_data[i] = (double)(process_rank * 1000 + i + 1);
   }
+
+  if (pg_all_gather(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] All-gather warm-up failed\n", process_rank);
+    free(send_data);
+    free(recv_data);
+    return -1;
+  }
+
+  for (int i = 0; i < chunk_size; i++) {
+    send_data[i] = (double)(process_rank * 1000 + i + 1);
+  }
+  memset(recv_data, 0, TEST_DATA_SIZE * sizeof(double));
 
   // Measure performance
   double start_time = get_time_microseconds();
