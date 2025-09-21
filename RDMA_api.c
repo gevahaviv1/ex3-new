@@ -415,7 +415,7 @@ int rdma_post_receive_request(struct ibv_qp *queue_pair, void *buffer_ptr, size_
 
   /* Configure receive work request */
   struct ibv_recv_wr receive_work_request = {
-      .wr_id = RDMA_WR_ID_RECV, .sg_list = &scatter_gather_element, .num_sge = 1};
+      .wr_id = 1, .sg_list = &scatter_gather_element, .num_sge = 1}; /* RECV ID */
 
   /* Post the receive request */
   struct ibv_recv_wr *bad_work_request;
@@ -441,7 +441,7 @@ int rdma_post_send_request(struct ibv_qp *queue_pair, void *buffer_ptr, size_t d
 
   /* Configure send work request */
   struct ibv_send_wr send_work_request = {
-      .wr_id = RDMA_WR_ID_SEND,
+      .wr_id = 2, /* SEND ID */
       .sg_list = &scatter_gather_element,
       .num_sge = 1,
       .opcode = IBV_WR_SEND,

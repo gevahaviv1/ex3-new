@@ -17,6 +17,7 @@
  * This example runs the test as process 2 in a 4-process group.
  */
 
+#define _DEFAULT_SOURCE
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

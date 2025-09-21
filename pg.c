@@ -614,9 +614,6 @@ int pg_cleanup(pg_handle_t process_group_handle) {
  */
 static int perform_ring_communication_step(pg_handle_internal_t *process_group, void *send_data, void *receive_data,
                                            size_t data_size) {
-  int left_neighbor =
-      (process_group->process_rank - 1 + process_group->process_group_size) % process_group->process_group_size;
-  int right_neighbor = (process_group->process_rank + 1) % process_group->process_group_size;
 
   /* Copy send data to RDMA send buffer */
   memcpy(process_group->right_send_buffer, send_data, data_size);
@@ -843,7 +840,6 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void 
   PG_CHECK_NULL(receive_buffer, "Receive buffer is NULL");
 
   int group_size = process_group->process_group_size;
-  int process_rank = process_group->process_rank;
 
   /* Global synchronization barrier before starting collective operation */
   usleep(2000000); /* 2 second initial barrier for all processes */
@@ -1046,7 +1042,6 @@ static int pg_all_gather_pipelined(pg_handle_internal_t *process_group, void *se
   
   /* Post receive for control message from left neighbor */
   control_msg_t recv_control_msg;
-  uint64_t recv_wr_id = 200 + process_rank; /* Simple receive ID */
   if (rdma_post_receive_request(process_group->left_neighbor_qp, &recv_control_msg,
                                sizeof(recv_control_msg), process_group->left_receive_mr) != PG_SUCCESS) {
     return PG_ERROR;
@@ -1075,7 +1070,6 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
   PG_CHECK_NULL(receive_buffer, "Receive buffer is NULL");
 
   int group_size = process_group->process_group_size;
-  int process_rank = process_group->process_rank;
 
   /* Global synchronization barrier before starting collective operation */
   usleep(2000000); /* 2 second initial barrier for all processes */
@@ -1121,7 +1115,6 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *rec
 
   /* Phase 2: All-gather to distribute complete results */
   pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
-  int chunk_size = element_count / process_group->process_group_size;
   size_t element_size = pg_get_datatype_element_size(data_type);
 
   /* Allocate temporary buffer for all-gather result */
