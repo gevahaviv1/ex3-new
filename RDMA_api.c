@@ -1,13 +1,12 @@
 #define _DEFAULT_SOURCE
-#include "RDMA_api.h"
-
-#include <errno.h>
+#include <infiniband/verbs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "constants.h"
+#include "RDMA_api.h"
 
 /*
  * =============================================================================
@@ -559,4 +558,132 @@ int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, struct ib
     /* num_completions == 0: no completions available, keep polling */
     usleep(1);
   }
+}
+
+/*
+ * =============================================================================
+ * RDMA One-Sided Operations Implementation
+ * =============================================================================
+ */
+
+
+int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data_size, uint64_t wr_id) {
+  PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
+  PG_CHECK_NULL(data_ptr, "Data pointer is NULL");
+
+  if (data_size == 0) {
+    fprintf(stderr, "Data size cannot be zero\n");
+    return PG_ERROR;
+  }
+
+  if (data_size > RDMA_DEFAULT_INLINE_DATA_SIZE) {
+    fprintf(stderr, "Data size %zu exceeds maximum inline size %d\n", data_size, RDMA_DEFAULT_INLINE_DATA_SIZE);
+    return PG_ERROR;
+  }
+
+  /* Configure scatter-gather element for inline data */
+  struct ibv_sge scatter_gather_element = {
+      .addr = (uintptr_t)data_ptr,
+      .length = data_size,
+      .lkey = 0  /* Not needed for inline data */
+  };
+
+  /* Configure send work request with inline data */
+  struct ibv_send_wr send_work_request = {
+      .wr_id = wr_id,
+      .next = NULL,
+      .sg_list = &scatter_gather_element,
+      .num_sge = 1,
+      .opcode = IBV_WR_SEND,
+      .send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE
+  };
+
+  /* Post the send request */
+  struct ibv_send_wr *bad_work_request;
+  int result = ibv_post_send(queue_pair, &send_work_request, &bad_work_request);
+
+  if (result != 0) {
+    fprintf(stderr, "Failed to post inline send work request\n");
+    return PG_ERROR;
+  }
+
+  return PG_SUCCESS;
+}
+
+/*
+ * =============================================================================
+ * Simplified RDMA Operations for Large-Message Zero-Copy
+ * =============================================================================
+ */
+
+int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size, 
+                           struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey) {
+  if (!qp || !local_buf || !local_mr || size == 0) {
+    return -1;
+  }
+
+  /* Configure scatter-gather element for local buffer */
+  struct ibv_sge sge = {
+      .addr = (uintptr_t)local_buf,
+      .length = size,
+      .lkey = local_mr->lkey
+  };
+
+  /* Configure RDMA write work request */
+  struct ibv_send_wr wr = {
+      .wr_id = 0,  /* No work request ID tracking */
+      .next = NULL,
+      .sg_list = &sge,
+      .num_sge = 1,
+      .opcode = IBV_WR_RDMA_WRITE,
+      .send_flags = IBV_SEND_SIGNALED,
+      .wr = {
+          .rdma = {
+              .remote_addr = remote_addr,
+              .rkey = rkey
+          }
+      }
+  };
+
+  /* Post the write request */
+  struct ibv_send_wr *bad_wr;
+  int result = ibv_post_send(qp, &wr, &bad_wr);
+
+  return (result == 0) ? 0 : -1;
+}
+
+int rdma_post_read_request(struct ibv_qp *qp, void *local_buf, size_t size,
+                          struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey) {
+  if (!qp || !local_buf || !local_mr || size == 0) {
+    return -1;
+  }
+
+  /* Configure scatter-gather element for local buffer */
+  struct ibv_sge sge = {
+      .addr = (uintptr_t)local_buf,
+      .length = size,
+      .lkey = local_mr->lkey
+  };
+
+  /* Configure RDMA read work request */
+  struct ibv_send_wr wr = {
+      .wr_id = 0,  /* No work request ID tracking */
+      .next = NULL,
+      .sg_list = &sge,
+      .num_sge = 1,
+      .opcode = IBV_WR_RDMA_READ,
+      .send_flags = IBV_SEND_SIGNALED,
+      .wr = {
+          .rdma = {
+              .remote_addr = remote_addr,
+              .rkey = rkey
+          }
+      }
+  };
+
+  /* Post the read request */
+  struct ibv_send_wr *bad_wr;
+  int result = ibv_post_send(qp, &wr, &bad_wr);
+
+  return (result == 0) ? 0 : -1;
 }

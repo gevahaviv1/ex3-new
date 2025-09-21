@@ -45,11 +45,12 @@
 #define PG_CHUNK_SIZE_BYTES  4096          /* 4KB chunks for pipelined transfers */
 
 /*
- * Work Request Identifiers
- * Used to distinguish different types of RDMA operations
+ * Pipelining Configuration
+ * Parameters for overlapping communication and computation
  */
-#define RDMA_WR_ID_RECV 1 /* Identifier for receive work requests */
-#define RDMA_WR_ID_SEND 2 /* Identifier for send work requests */
+#define PG_DEFAULT_EAGER_MAX 8192  /* Maximum message size for eager protocol */
+#define PG_DEFAULT_CHUNK_BYTES 4096 /* Default chunk size for pipelining */
+#define PG_DEFAULT_INFLIGHT 4      /* Default maximum inflight operations */
 
 /*
  * Packet Sequence Number Generation

@@ -246,4 +246,53 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue, struct ibv_wc *wor
 int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, struct ibv_wc *work_completion,
                                       uint64_t expected_wr_id);
 
+
+/**
+ * Post send work request with inline data for control messages
+ *
+ * Sends small control messages using inline data, which is more efficient
+ * for small payloads as it avoids memory registration overhead.
+ *
+ * @param queue_pair: Queue pair to send data on
+ * @param data_ptr: Pointer to data to send (does not need to be registered)
+ * @param data_size: Size of data to send (must be <= max_inline_data)
+ * @param wr_id: Work request ID for completion identification
+ * @return: PG_SUCCESS on success, PG_ERROR on failure
+ */
+int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data_size, uint64_t wr_id);
+
+/**
+ * Simplified RDMA write helper for large-message zero-copy
+ *
+ * Posts an RDMA write work request without work request ID tracking.
+ * Constructs WR with IBV_WR_RDMA_WRITE opcode and posts with ibv_post_send.
+ *
+ * @param qp: Queue pair to send write request on
+ * @param local_buf: Local buffer containing data to write
+ * @param size: Amount of data to write in bytes
+ * @param local_mr: Memory region handle for the local buffer
+ * @param remote_addr: Remote memory address to write to
+ * @param rkey: Remote key for accessing remote memory
+ * @return: 0 on success, -1 on error
+ */
+int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size, 
+                           struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey);
+
+/**
+ * Simplified RDMA read helper for large-message zero-copy
+ *
+ * Posts an RDMA read work request without work request ID tracking.
+ * Constructs WR with IBV_WR_RDMA_READ opcode and posts with ibv_post_send.
+ *
+ * @param qp: Queue pair to send read request on
+ * @param local_buf: Local buffer to read data into
+ * @param size: Amount of data to read in bytes
+ * @param local_mr: Memory region handle for the local buffer
+ * @param remote_addr: Remote memory address to read from
+ * @param rkey: Remote key for accessing remote memory
+ * @return: 0 on success, -1 on error
+ */
+int rdma_post_read_request(struct ibv_qp *qp, void *local_buf, size_t size,
+                          struct ibv_mr *local_mr, uint64_t remote_addr, uint32_t rkey);
+
 #endif /* RDMA_API_H */

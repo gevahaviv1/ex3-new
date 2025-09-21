@@ -71,6 +71,16 @@ typedef struct {
   /* Buffer Configuration */
   size_t total_buffer_size_bytes; /* Total size of each communication buffer */
   size_t chunk_size_bytes;        /* Size of data chunks for pipelined operations */
+  
+  /* Pipelining Configuration */
+  size_t eager_max;               /* Maximum message size for eager protocol */
+  size_t chunk_bytes;             /* Chunk size for pipelined operations */
+  int inflight;                   /* Maximum number of inflight operations */
+
+  /* Remote Memory Region Information for Zero-Copy Operations */
+  uint64_t *remote_buffer_addrs;  /* Array of remote buffer addresses for each process */
+  uint32_t *remote_buffer_rkeys;  /* Array of remote buffer rkeys for each process */
+  size_t remote_buffer_size;      /* Size of each remote buffer */
 } pg_handle_internal_t;
 
 /*

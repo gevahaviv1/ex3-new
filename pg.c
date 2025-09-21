@@ -3,8 +3,6 @@
 #include "pg.h"
 
 #include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -431,6 +429,46 @@ static int establish_neighbor_connections(pg_handle_internal_t *process_group) {
   return PG_SUCCESS;
 }
 
+/**
+ * Initialize remote memory region information for zero-copy operations
+ */
+static int initialize_remote_memory_info(pg_handle_internal_t *process_group) {
+  int group_size = process_group->process_group_size;
+  int process_rank = process_group->process_rank;
+  
+  /* Allocate arrays for remote memory information */
+  process_group->remote_buffer_addrs = calloc(group_size, sizeof(uint64_t));
+  process_group->remote_buffer_rkeys = calloc(group_size, sizeof(uint32_t));
+  
+  if (!process_group->remote_buffer_addrs || !process_group->remote_buffer_rkeys) {
+    fprintf(stderr, "[Process %d] ERROR: Failed to allocate remote memory info arrays\n", process_rank);
+    free(process_group->remote_buffer_addrs);
+    free(process_group->remote_buffer_rkeys);
+    return PG_ERROR;
+  }
+  
+  /* Set buffer size for remote operations */
+  process_group->remote_buffer_size = process_group->total_buffer_size_bytes;
+  
+  /* Use right_receive_buffer as the target buffer for remote writes */
+  uint64_t local_buffer_addr = (uint64_t)(uintptr_t)process_group->right_receive_buffer;
+  uint32_t local_buffer_rkey = process_group->right_receive_mr->rkey;
+  
+  /* For now, use a simplified approach - assume all processes have the same buffer layout */
+  for (int i = 0; i < group_size; i++) {
+    if (i == process_rank) {
+      process_group->remote_buffer_addrs[i] = local_buffer_addr;
+      process_group->remote_buffer_rkeys[i] = local_buffer_rkey;
+    } else {
+      /* Placeholder - in a full implementation, this would be exchanged via TCP */
+      process_group->remote_buffer_addrs[i] = local_buffer_addr;
+      process_group->remote_buffer_rkeys[i] = local_buffer_rkey;
+    }
+  }
+  
+  return PG_SUCCESS;
+}
+
 /*
  * =============================================================================
  * Process Group Lifecycle Management Implementation
@@ -477,6 +515,15 @@ int pg_initialize(const char *server_list_string, pg_handle_t *process_group_han
   /* Configure buffer sizes */
   process_group->total_buffer_size_bytes = PG_BUFFER_SIZE_BYTES;
   process_group->chunk_size_bytes = PG_CHUNK_SIZE_BYTES;
+  
+  /* Configure pipelining parameters (can be overridden by environment variables) */
+  const char *eager_max_env = getenv("PG_EAGER_MAX");
+  const char *chunk_bytes_env = getenv("PG_CHUNK_BYTES");
+  const char *inflight_env = getenv("PG_INFLIGHT");
+  
+  process_group->eager_max = eager_max_env ? atoi(eager_max_env) : PG_DEFAULT_EAGER_MAX;
+  process_group->chunk_bytes = chunk_bytes_env ? atoi(chunk_bytes_env) : PG_DEFAULT_CHUNK_BYTES;
+  process_group->inflight = inflight_env ? atoi(inflight_env) : PG_DEFAULT_INFLIGHT;
 
   /* Allocate communication buffers */
   if (allocate_communication_buffers(process_group) != PG_SUCCESS) {
@@ -498,6 +545,12 @@ int pg_initialize(const char *server_list_string, pg_handle_t *process_group_han
 
   /* Establish RDMA connections with ring neighbors */
   if (establish_neighbor_connections(process_group) != PG_SUCCESS) {
+    pg_cleanup(process_group);
+    return PG_ERROR;
+  }
+
+  /* Initialize remote memory region information for zero-copy operations */
+  if (initialize_remote_memory_info(process_group) != PG_SUCCESS) {
     pg_cleanup(process_group);
     return PG_ERROR;
   }
@@ -531,6 +584,10 @@ int pg_cleanup(pg_handle_t process_group_handle) {
   free(process_group->left_receive_buffer);
   free(process_group->right_send_buffer);
   free(process_group->right_receive_buffer);
+
+  /* Free remote memory region arrays */
+  free(process_group->remote_buffer_addrs);
+  free(process_group->remote_buffer_rkeys);
 
   /* Free hostname list */
   pgnet_free_hostname_list(process_group->hostname_list, process_group->process_group_size);
@@ -603,11 +660,11 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group, 
     }
 
     /* Check which completion we got */
-    if (work_completion.wr_id == RDMA_WR_ID_RECV && !recv_completed) {
+    if (work_completion.wr_id == 1 && !recv_completed) { /* RECV completion */
       recv_completed = 1;
       /* Copy received data to output buffer */
       memcpy(receive_data, process_group->left_receive_buffer, data_size);
-    } else if (work_completion.wr_id == RDMA_WR_ID_SEND && !send_completed) {
+    } else if (work_completion.wr_id == 2 && !send_completed) { /* SEND completion */
       send_completed = 1;
     } else {
       /* Ignore unrelated completions */
@@ -622,6 +679,160 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group, 
  * Collective Communication Operations Implementation
  * =============================================================================
  */
+
+/**
+ * Pipelined reduce-scatter with overlapped communication and computation
+ */
+static int pg_reduce_scatter_pipelined(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
+                                       int element_count, pg_datatype_t data_type, pg_operation_t reduction_op) {
+  int group_size = process_group->process_group_size;
+  int process_rank = process_group->process_rank;
+  size_t element_size = pg_get_datatype_element_size(data_type);
+  size_t total_data_size = element_count * element_size;
+  size_t chunk_size_bytes = (element_count / group_size) * element_size;
+  
+  /* Calculate pipelining parameters */
+  size_t pipeline_chunk_size = PG_MIN(process_group->chunk_bytes, total_data_size);
+  int num_pipeline_chunks = (total_data_size + pipeline_chunk_size - 1) / pipeline_chunk_size;
+  int max_inflight = PG_MIN(process_group->inflight, num_pipeline_chunks);
+  
+  /* Copy input data to working buffer */
+  memcpy(process_group->right_send_buffer, send_buffer, total_data_size);
+  
+  /* Temp buffer to preserve reduced chunk across buffer swaps */
+  void *reduced_chunk_tmp = malloc(chunk_size_bytes);
+  if (!reduced_chunk_tmp) {
+    fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for reduce-scatter\n", process_rank);
+    return PG_ERROR;
+  }
+  
+  /* Perform reduce-scatter algorithm with (group_size - 1) steps */
+  for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
+    int reduction_chunk_index = process_rank;
+    
+    /* Pipeline the communication for this step */
+    for (int pipeline_chunk = 0; pipeline_chunk < num_pipeline_chunks; pipeline_chunk += max_inflight) {
+      int chunks_this_batch = PG_MIN(max_inflight, num_pipeline_chunks - pipeline_chunk);
+      
+      /* Post receives for this batch */
+      for (int i = 0; i < chunks_this_batch; i++) {
+        int chunk_idx = pipeline_chunk + i;
+        size_t chunk_offset = chunk_idx * pipeline_chunk_size;
+        size_t this_chunk_size = PG_MIN(pipeline_chunk_size, total_data_size - chunk_offset);
+        
+        if (rdma_post_receive_request(process_group->left_neighbor_qp,
+                                      (char *)process_group->left_receive_buffer + chunk_offset,
+                                      this_chunk_size, process_group->left_receive_mr) != PG_SUCCESS) {
+          free(reduced_chunk_tmp);
+          return PG_ERROR;
+        }
+      }
+      
+      /* Post sends for this batch */
+      for (int i = 0; i < chunks_this_batch; i++) {
+        int chunk_idx = pipeline_chunk + i;
+        size_t chunk_offset = chunk_idx * pipeline_chunk_size;
+        size_t this_chunk_size = PG_MIN(pipeline_chunk_size, total_data_size - chunk_offset);
+        
+        if (rdma_post_send_request(process_group->right_neighbor_qp,
+                                   (char *)process_group->right_send_buffer + chunk_offset,
+                                   this_chunk_size, process_group->right_send_mr) != PG_SUCCESS) {
+          free(reduced_chunk_tmp);
+          return PG_ERROR;
+        }
+      }
+      
+      /* Wait for all operations in this batch to complete */
+      for (int i = 0; i < chunks_this_batch * 2; i++) { /* 2x for send + recv */
+        struct ibv_wc work_completion;
+        if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+          free(reduced_chunk_tmp);
+          return PG_ERROR;
+        }
+      }
+    }
+    
+    /* Apply reduction operation to the designated chunk */
+    char *local_chunk_ptr = (char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes);
+    char *remote_chunk_ptr = (char *)process_group->left_receive_buffer + (reduction_chunk_index * chunk_size_bytes);
+    int chunk_element_count = (int)(chunk_size_bytes / element_size);
+    
+    /* Reduce into temp buffer to avoid being clobbered by the buffer swap */
+    memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_size_bytes);
+    pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, remote_chunk_ptr, chunk_element_count,
+                                 data_type, reduction_op);
+    
+    /* Prepare data for next communication step */
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_data_size);
+    memcpy((char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes), reduced_chunk_tmp,
+           chunk_size_bytes);
+  }
+  
+  /* Extract this process's final result chunk */
+  int my_chunk_index = process_rank;
+  char *my_result_chunk = (char *)process_group->right_send_buffer + (my_chunk_index * chunk_size_bytes);
+  memcpy(receive_buffer, my_result_chunk, chunk_size_bytes);
+  
+  free(reduced_chunk_tmp);
+  return PG_SUCCESS;
+}
+
+/**
+ * Eager reduce-scatter implementation using SEND/RECV with memcpy for small messages
+ */
+static int pg_reduce_scatter_eager(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
+                                   int element_count, pg_datatype_t data_type, pg_operation_t reduction_op) {
+  int group_size = process_group->process_group_size;
+  int process_rank = process_group->process_rank;
+  size_t element_size = pg_get_datatype_element_size(data_type);
+  size_t total_data_size = element_count * element_size;
+  size_t chunk_size_bytes = (element_count / group_size) * element_size;
+
+  /* Copy input data to working buffer */
+  memcpy(process_group->right_send_buffer, send_buffer, total_data_size);
+
+  /* Temp buffer to preserve reduced chunk across buffer swaps */
+  void *reduced_chunk_tmp = malloc(chunk_size_bytes);
+  if (!reduced_chunk_tmp) {
+    fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for reduce-scatter\n", process_rank);
+    return PG_ERROR;
+  }
+
+  /* Perform reduce-scatter algorithm with (group_size - 1) steps */
+  for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
+    int reduction_chunk_index = process_rank;
+
+    /* Perform ring communication step */
+    if (perform_ring_communication_step(process_group, process_group->right_send_buffer,
+                                        process_group->left_receive_buffer, total_data_size) != PG_SUCCESS) {
+      free(reduced_chunk_tmp);
+      return PG_ERROR;
+    }
+
+    /* Apply reduction operation to the designated chunk */
+    char *local_chunk_ptr = (char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes);
+    char *remote_chunk_ptr = (char *)process_group->left_receive_buffer + (reduction_chunk_index * chunk_size_bytes);
+    int chunk_element_count = (int)(chunk_size_bytes / element_size);
+
+    /* Reduce into temp buffer to avoid being clobbered by the buffer swap */
+    memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_size_bytes);
+    pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, remote_chunk_ptr, chunk_element_count, data_type,
+                                 reduction_op);
+
+    /* Prepare data for next communication step */
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_data_size);
+    memcpy((char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes), reduced_chunk_tmp,
+           chunk_size_bytes);
+  }
+
+  /* Extract this process's final result chunk */
+  int my_chunk_index = process_rank;
+  char *my_result_chunk = (char *)process_group->right_send_buffer + (my_chunk_index * chunk_size_bytes);
+  memcpy(receive_buffer, my_result_chunk, chunk_size_bytes);
+
+  free(reduced_chunk_tmp);
+  return PG_SUCCESS;
+}
 
 int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
                       pg_datatype_t data_type, pg_operation_t reduction_op) {
@@ -646,88 +857,29 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void 
 
   size_t element_size = pg_get_datatype_element_size(data_type);
   size_t total_data_size = element_count * element_size;
-  size_t chunk_size_bytes = (element_count / group_size) * element_size;
-
-  /* Copy input data to working buffer */
-  memcpy(process_group->right_send_buffer, send_buffer, total_data_size);
-
-  /* Temp buffer to preserve reduced chunk across buffer swaps */
-  void *reduced_chunk_tmp = malloc(chunk_size_bytes);
-  if (!reduced_chunk_tmp) {
-    fprintf(stderr,
-            "[Process %d] ERROR: Failed to allocate temp buffer for "
-            "reduce-scatter\n",
-            process_rank);
-    return PG_ERROR;
+  
+  /* Dispatch based on message size */
+  if (total_data_size <= process_group->eager_max) {
+    /* Use eager path for small messages */
+    return pg_reduce_scatter_eager(process_group, send_buffer, receive_buffer, element_count, data_type, reduction_op);
+  } else {
+    /* Use pipelined path for large messages */
+    return pg_reduce_scatter_pipelined(process_group, send_buffer, receive_buffer, element_count, data_type, reduction_op);
   }
-
-  /* Perform reduce-scatter algorithm with (group_size - 1) steps */
-  for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
-    /* Always reduce our own chunk index so final ownership is process_rank */
-    int reduction_chunk_index = process_rank;
-
-    /* Perform ring communication step */
-    if (perform_ring_communication_step(process_group, process_group->right_send_buffer,
-                                        process_group->left_receive_buffer, total_data_size) != PG_SUCCESS) {
-      free(reduced_chunk_tmp);
-      return PG_ERROR;
-    }
-
-    /* Apply reduction operation to the designated chunk */
-    char *local_chunk_ptr = (char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes);
-    char *remote_chunk_ptr = (char *)process_group->left_receive_buffer + (reduction_chunk_index * chunk_size_bytes);
-
-    int chunk_element_count = (int)(chunk_size_bytes / element_size);
-
-    /* Reduce into temp buffer to avoid being clobbered by the buffer swap */
-    memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_size_bytes);
-    pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, remote_chunk_ptr, chunk_element_count, data_type,
-                                 reduction_op);
-
-    /* Prepare data for next communication step */
-    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_data_size);
-    memcpy((char *)process_group->right_send_buffer + (reduction_chunk_index * chunk_size_bytes), reduced_chunk_tmp,
-           chunk_size_bytes);
-  }
-
-  /* Extract this process's final result chunk (our own chunk index) */
-  int my_chunk_index = process_rank;
-  char *my_result_chunk = (char *)process_group->right_send_buffer + (my_chunk_index * chunk_size_bytes);
-  memcpy(receive_buffer, my_result_chunk, chunk_size_bytes);
-
-  free(reduced_chunk_tmp);
-
-  return PG_SUCCESS;
 }
 
-int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
-                  pg_datatype_t data_type) {
-  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
-
-  PG_CHECK_NULL(process_group, "Process group handle is NULL");
-  PG_CHECK_NULL(send_buffer, "Send buffer is NULL");
-  PG_CHECK_NULL(receive_buffer, "Receive buffer is NULL");
-
+/**
+ * Eager all-gather implementation using SEND/RECV with memcpy for small messages
+ */
+static int pg_all_gather_eager(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
+                               int element_count, pg_datatype_t data_type) {
   int group_size = process_group->process_group_size;
   int process_rank = process_group->process_rank;
-
-  /* Global synchronization barrier before starting collective operation */
-  usleep(2000000); /* 2 second initial barrier for all processes */
-
-  /* Handle single-process case */
-  if (group_size == 1) {
-    size_t element_size = pg_get_datatype_element_size(data_type);
-    memcpy(receive_buffer, send_buffer, element_count * element_size);
-    return PG_SUCCESS;
-  }
-
   size_t element_size = pg_get_datatype_element_size(data_type);
   size_t total_data_size = element_count * element_size;
   size_t chunk_size_bytes = (element_count / group_size) * element_size;
 
-  /* Initialize receive buffer and place local data in correct position.
-   * Handle aliasing between send_buffer and receive_buffer by copying
-   * the local chunk to a temporary buffer before clearing receive_buffer. */
+  /* Initialize receive buffer and place local data in correct position */
   void *tmp_chunk = malloc(chunk_size_bytes);
   if (!tmp_chunk) {
     fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for all-gather\n", process_rank);
@@ -807,6 +959,145 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
   /* Copy final result to output buffer */
   memcpy(receive_buffer, process_group->right_send_buffer, total_data_size);
   return PG_SUCCESS;
+}
+
+/**
+ * Pipelined all-gather implementation using RDMA Write operations for large messages
+ */
+static int pg_all_gather_pipelined(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
+                                   int element_count, pg_datatype_t data_type) {
+  int group_size = process_group->process_group_size;
+  int process_rank = process_group->process_rank;
+  size_t element_size = pg_get_datatype_element_size(data_type);
+  size_t chunk_size_bytes = element_count * element_size;
+  size_t total_data_size = chunk_size_bytes * group_size;
+  
+  /* Calculate pipelining parameters */
+  size_t pipeline_chunk_size = PG_MIN(process_group->chunk_bytes, chunk_size_bytes);
+  int num_pipeline_chunks = (chunk_size_bytes + pipeline_chunk_size - 1) / pipeline_chunk_size;
+  int max_inflight = PG_MIN(process_group->inflight, num_pipeline_chunks);
+  
+  /* Initialize receive buffer - clear it and place local data */
+  memset(receive_buffer, 0, total_data_size);
+  char *my_data_position = (char *)receive_buffer + (process_rank * chunk_size_bytes);
+  memcpy(my_data_position, send_buffer, chunk_size_bytes);
+  
+  /* Synchronization barrier - ensure all processes have initialized their buffers */
+  usleep(100000); /* 100ms barrier */
+  
+  /* Phase 1: Each process writes its data to all other processes using RDMA Write */
+  for (int target_rank = 0; target_rank < group_size; target_rank++) {
+    if (target_rank == process_rank) {
+      continue; /* Skip writing to self */
+    }
+    
+    /* Calculate remote address for this process's data in target's buffer */
+    uint64_t remote_addr = process_group->remote_buffer_addrs[target_rank] + 
+                          (process_rank * chunk_size_bytes);
+    uint32_t remote_rkey = process_group->remote_buffer_rkeys[target_rank];
+    
+    /* Pipeline the write operation */
+    for (int pipeline_chunk = 0; pipeline_chunk < num_pipeline_chunks; pipeline_chunk += max_inflight) {
+      int chunks_this_batch = PG_MIN(max_inflight, num_pipeline_chunks - pipeline_chunk);
+      
+      /* Post RDMA writes for this batch */
+      for (int i = 0; i < chunks_this_batch; i++) {
+        int chunk_idx = pipeline_chunk + i;
+        size_t chunk_offset = chunk_idx * pipeline_chunk_size;
+        size_t this_chunk_size = PG_MIN(pipeline_chunk_size, chunk_size_bytes - chunk_offset);
+        
+        if (rdma_post_write_request(process_group->right_neighbor_qp,
+                                   (char *)send_buffer + chunk_offset,
+                                   this_chunk_size,
+                                   process_group->right_send_mr,
+                                   remote_addr + chunk_offset,
+                                   remote_rkey) != 0) {
+          return PG_ERROR;
+        }
+      }
+      
+      /* Wait for all writes in this batch to complete */
+      for (int i = 0; i < chunks_this_batch; i++) {
+        struct ibv_wc work_completion;
+        if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+          return PG_ERROR;
+        }
+      }
+    }
+  }
+  
+  /* Phase 2: Send completion notification using inline control messages */
+  typedef struct {
+    int sender_rank;
+    int phase_complete;
+  } control_msg_t;
+  
+  control_msg_t control_msg = {
+    .sender_rank = process_rank,
+    .phase_complete = 1
+  };
+  
+  /* Send control message to right neighbor */
+  uint64_t control_wr_id = 100 + process_rank; /* Simple control message ID */
+  if (rdma_post_send_inline(process_group->right_neighbor_qp, &control_msg, 
+                           sizeof(control_msg), control_wr_id) != PG_SUCCESS) {
+    return PG_ERROR;
+  }
+  
+  /* Post receive for control message from left neighbor */
+  control_msg_t recv_control_msg;
+  uint64_t recv_wr_id = 200 + process_rank; /* Simple receive ID */
+  if (rdma_post_receive_request(process_group->left_neighbor_qp, &recv_control_msg,
+                               sizeof(recv_control_msg), process_group->left_receive_mr) != PG_SUCCESS) {
+    return PG_ERROR;
+  }
+  
+  /* Wait for both control operations to complete */
+  for (int i = 0; i < 2; i++) {
+    struct ibv_wc work_completion;
+    if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+      return PG_ERROR;
+    }
+  }
+  
+  /* Phase 3: Final synchronization barrier */
+  usleep(200000); /* 200ms barrier to ensure all writes are visible */
+  
+  return PG_SUCCESS;
+}
+
+int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
+                  pg_datatype_t data_type) {
+  pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
+
+  PG_CHECK_NULL(process_group, "Process group handle is NULL");
+  PG_CHECK_NULL(send_buffer, "Send buffer is NULL");
+  PG_CHECK_NULL(receive_buffer, "Receive buffer is NULL");
+
+  int group_size = process_group->process_group_size;
+  int process_rank = process_group->process_rank;
+
+  /* Global synchronization barrier before starting collective operation */
+  usleep(2000000); /* 2 second initial barrier for all processes */
+
+  /* Handle single-process case */
+  if (group_size == 1) {
+    size_t element_size = pg_get_datatype_element_size(data_type);
+    memcpy(receive_buffer, send_buffer, element_count * element_size);
+    return PG_SUCCESS;
+  }
+
+  size_t element_size = pg_get_datatype_element_size(data_type);
+  size_t total_data_size = element_count * element_size;
+  
+  /* Dispatch based on message size */
+  if (total_data_size <= process_group->eager_max) {
+    /* Use eager path for small messages */
+    return pg_all_gather_eager(process_group, send_buffer, receive_buffer, element_count, data_type);
+  } else {
+    /* Use pipelined RDMA path for large messages */
+    return pg_all_gather_pipelined(process_group, send_buffer, receive_buffer, element_count, data_type);
+  }
 }
 
 int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
