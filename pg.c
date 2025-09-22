@@ -1081,6 +1081,9 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
     }
   }
 
+  /* Ensure neighbors have time to post control receives before we send */
+  usleep(1000);
+
   if (pg_post_control_send(process_group, 0, (uint32_t)process_rank) != PG_SUCCESS) {
     return PG_ERROR;
   }

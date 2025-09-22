@@ -495,7 +495,7 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue, struct ibv_wc *wor
 }
 
 /* Simple completion storage for out-of-order completions */
-#define MAX_STORED_COMPLETIONS 8
+#define MAX_STORED_COMPLETIONS 32
 static struct ibv_wc stored_completions[MAX_STORED_COMPLETIONS];
 static int stored_count = 0;
 
