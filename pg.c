@@ -627,6 +627,50 @@ int pg_cleanup(pg_handle_t process_group_handle) {
  * @param data_size: Size of data to send/receive in bytes
  * @return: PG_SUCCESS on success, PG_ERROR on failure
  */
+static int pg_ring_barrier(pg_handle_internal_t *process_group) {
+  static uint32_t barrier_generation = 0;
+  uint32_t generation = ++barrier_generation;
+
+  uint32_t *recv_slot = (uint32_t *)process_group->left_receive_buffer;
+  struct ibv_sge recv_sge = {
+      .addr = (uintptr_t)recv_slot,
+      .length = sizeof(uint32_t),
+      .lkey = process_group->left_receive_mr->lkey};
+
+  struct ibv_recv_wr recv_wr = {
+      .wr_id = WRID_BARRIER(generation),
+      .sg_list = &recv_sge,
+      .num_sge = 1};
+
+  struct ibv_recv_wr *bad_recv = NULL;
+  if (ibv_post_recv(process_group->left_neighbor_qp, &recv_wr, &bad_recv) != 0) {
+    fprintf(stderr, "[Process %d] Barrier receive post failed\n", process_group->process_rank);
+    return PG_ERROR;
+  }
+
+  uint32_t token = generation;
+  if (rdma_post_send_inline(process_group->right_neighbor_qp, &token, sizeof(token), WRID_BARRIER_SEND(generation)) !=
+      PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Barrier send failed\n", process_group->process_rank);
+    return PG_ERROR;
+  }
+
+  struct ibv_wc wc;
+  if (rdma_poll_for_specific_completion(process_group->rdma_context.completion_queue, &wc,
+                                        WRID_BARRIER_SEND(generation)) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Barrier send completion failed\n", process_group->process_rank);
+    return PG_ERROR;
+  }
+
+  if (rdma_poll_for_specific_completion(process_group->rdma_context.completion_queue, &wc,
+                                        WRID_BARRIER(generation)) != PG_SUCCESS) {
+    fprintf(stderr, "[Process %d] Barrier receive completion failed\n", process_group->process_rank);
+    return PG_ERROR;
+  }
+
+  return PG_SUCCESS;
+}
+
 static int perform_ring_communication_step(pg_handle_internal_t *process_group, void *send_data, void *receive_data,
                                            size_t data_size) {
 
@@ -843,6 +887,13 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void 
   PG_CHECK_NULL(receive_buffer, "Receive buffer is NULL");
 
   int group_size = process_group->process_group_size;
+
+  if (group_size > 1) {
+    if (pg_ring_barrier(process_group) != PG_SUCCESS) {
+      fprintf(stderr, "[Process %d] Barrier failed before reduce-scatter\n", process_group->process_rank);
+      return PG_ERROR;
+    }
+  }
 
   /* Handle single-process case */
   if (group_size == 1) {
@@ -1154,6 +1205,13 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
   PG_CHECK_NULL(receive_buffer, "Receive buffer is NULL");
 
   int group_size = process_group->process_group_size;
+
+  if (group_size > 1) {
+    if (pg_ring_barrier(process_group) != PG_SUCCESS) {
+      fprintf(stderr, "[Process %d] Barrier failed before all-gather\n", process_group->process_rank);
+      return PG_ERROR;
+    }
+  }
 
   /* Handle single-process case */
   if (group_size == 1) {

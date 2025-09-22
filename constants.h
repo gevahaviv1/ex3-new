@@ -113,6 +113,8 @@
 #define WRK_READ 1u
 #define WRK_CTRL 2u
 #define WRK_CTRL_SEND 3u
+#define WRK_BARRIER 4u
+#define WRK_BARRIER_SEND 5u
 
 #define WRID_KIND(wrid) ((uint8_t)(((uint64_t)(wrid)) >> WRID_KIND_SHIFT))
 
@@ -127,5 +129,10 @@
 
 #define WRID_CTRL_SEND(step) \
   ((((uint64_t)WRK_CTRL_SEND) << WRID_KIND_SHIFT) | ((uint64_t)(step) & 0x00FFFFFFFFFFFFFFULL))
+
+#define WRID_BARRIER(gen) ((((uint64_t)WRK_BARRIER) << WRID_KIND_SHIFT) | ((uint64_t)(gen) & 0x00FFFFFFFFFFFFFFULL))
+#define WRID_BARRIER_RECV_ID(wrid) ((uint32_t)((uint64_t)(wrid) & 0xFFFFFFFFULL))
+#define WRID_BARRIER_SEND(gen) \
+  ((((uint64_t)WRK_BARRIER_SEND) << WRID_KIND_SHIFT) | ((uint64_t)(gen) & 0x00FFFFFFFFFFFFFFULL))
 
 #endif /* CONSTANTS_H */
