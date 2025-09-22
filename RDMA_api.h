@@ -251,7 +251,6 @@ int rdma_poll_for_completion(struct ibv_cq *completion_queue, struct ibv_wc *wor
 int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, struct ibv_wc *work_completion,
                                       uint64_t expected_wr_id);
 
-
 /**
  * Post send work request with inline data for control messages
  *
@@ -282,10 +281,8 @@ int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data
  * @param signaled: Non-zero to request a completion notification
  * @return: 0 on success, -1 on error
  */
-int rdma_post_write_request(struct ibv_qp *qp,
-                            void *local_buf, size_t size, struct ibv_mr *local_mr,
-                            uint64_t remote_addr, uint32_t rkey,
-                            uint64_t wr_id, int signaled);
+int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size, struct ibv_mr *local_mr,
+                            uint64_t remote_addr, uint32_t rkey, uint64_t wr_id, int signaled);
 
 /**
  * Simplified RDMA read helper for large-message zero-copy
@@ -303,9 +300,7 @@ int rdma_post_write_request(struct ibv_qp *qp,
  * @param signaled: Non-zero to request a completion notification
  * @return: 0 on success, -1 on error
  */
-int rdma_post_read_request(struct ibv_qp *qp,
-                           void *local_buf, size_t size, struct ibv_mr *local_mr,
-                           uint64_t remote_addr, uint32_t rkey,
-                           uint64_t wr_id, int signaled);
+int rdma_post_read_request(struct ibv_qp *qp, void *local_buf, size_t size, struct ibv_mr *local_mr,
+                           uint64_t remote_addr, uint32_t rkey, uint64_t wr_id, int signaled);
 
 #endif /* RDMA_API_H */

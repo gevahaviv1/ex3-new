@@ -1,4 +1,6 @@
 #define _DEFAULT_SOURCE
+#include "RDMA_api.h"
+
 #include <errno.h>
 #include <infiniband/verbs.h>
 #include <stdio.h>
@@ -7,7 +9,6 @@
 #include <unistd.h>
 
 #include "constants.h"
-#include "RDMA_api.h"
 
 /*
  * =============================================================================
@@ -571,7 +572,6 @@ int rdma_poll_for_specific_completion(struct ibv_cq *completion_queue, struct ib
  * =============================================================================
  */
 
-
 int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data_size, uint64_t wr_id) {
   PG_CHECK_NULL(queue_pair, "Queue pair is NULL");
   PG_CHECK_NULL(data_ptr, "Data pointer is NULL");
@@ -588,20 +588,16 @@ int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data
 
   /* Configure scatter-gather element for inline data */
   struct ibv_sge scatter_gather_element = {
-      .addr = (uintptr_t)data_ptr,
-      .length = data_size,
-      .lkey = 0  /* Not needed for inline data */
+      .addr = (uintptr_t)data_ptr, .length = data_size, .lkey = 0 /* Not needed for inline data */
   };
 
   /* Configure send work request with inline data */
-  struct ibv_send_wr send_work_request = {
-      .wr_id = wr_id,
-      .next = NULL,
-      .sg_list = &scatter_gather_element,
-      .num_sge = 1,
-      .opcode = IBV_WR_SEND,
-      .send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE
-  };
+  struct ibv_send_wr send_work_request = {.wr_id = wr_id,
+                                          .next = NULL,
+                                          .sg_list = &scatter_gather_element,
+                                          .num_sge = 1,
+                                          .opcode = IBV_WR_SEND,
+                                          .send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE};
 
   /* Post the send request */
   struct ibv_send_wr *bad_work_request;
@@ -621,36 +617,23 @@ int rdma_post_send_inline(struct ibv_qp *queue_pair, void *data_ptr, size_t data
  * =============================================================================
  */
 
-int rdma_post_write_request(struct ibv_qp *qp,
-                            void *local_buf, size_t size, struct ibv_mr *local_mr,
-                            uint64_t remote_addr, uint32_t rkey,
-                            uint64_t wr_id, int signaled) {
+int rdma_post_write_request(struct ibv_qp *qp, void *local_buf, size_t size, struct ibv_mr *local_mr,
+                            uint64_t remote_addr, uint32_t rkey, uint64_t wr_id, int signaled) {
   if (!qp || !local_buf || !local_mr || size == 0) {
     errno = EINVAL;
     perror("rdma_post_write_request");
     return -1;
   }
 
-  struct ibv_sge sge = {
-      .addr = (uintptr_t)local_buf,
-      .length = size,
-      .lkey = local_mr->lkey
-  };
+  struct ibv_sge sge = {.addr = (uintptr_t)local_buf, .length = size, .lkey = local_mr->lkey};
 
-  struct ibv_send_wr wr = {
-      .wr_id = wr_id,
-      .next = NULL,
-      .sg_list = &sge,
-      .num_sge = 1,
-      .opcode = IBV_WR_RDMA_WRITE,
-      .send_flags = 0,
-      .wr = {
-          .rdma = {
-              .remote_addr = remote_addr,
-              .rkey = rkey
-          }
-      }
-  };
+  struct ibv_send_wr wr = {.wr_id = wr_id,
+                           .next = NULL,
+                           .sg_list = &sge,
+                           .num_sge = 1,
+                           .opcode = IBV_WR_RDMA_WRITE,
+                           .send_flags = 0,
+                           .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}};
 
   if (signaled) {
     wr.send_flags |= IBV_SEND_SIGNALED;
@@ -668,36 +651,23 @@ int rdma_post_write_request(struct ibv_qp *qp,
   return 0;
 }
 
-int rdma_post_read_request(struct ibv_qp *qp,
-                           void *local_buf, size_t size, struct ibv_mr *local_mr,
-                           uint64_t remote_addr, uint32_t rkey,
-                           uint64_t wr_id, int signaled) {
+int rdma_post_read_request(struct ibv_qp *qp, void *local_buf, size_t size, struct ibv_mr *local_mr,
+                           uint64_t remote_addr, uint32_t rkey, uint64_t wr_id, int signaled) {
   if (!qp || !local_buf || !local_mr || size == 0) {
     errno = EINVAL;
     perror("rdma_post_read_request");
     return -1;
   }
 
-  struct ibv_sge sge = {
-      .addr = (uintptr_t)local_buf,
-      .length = size,
-      .lkey = local_mr->lkey
-  };
+  struct ibv_sge sge = {.addr = (uintptr_t)local_buf, .length = size, .lkey = local_mr->lkey};
 
-  struct ibv_send_wr wr = {
-      .wr_id = wr_id,
-      .next = NULL,
-      .sg_list = &sge,
-      .num_sge = 1,
-      .opcode = IBV_WR_RDMA_READ,
-      .send_flags = 0,
-      .wr = {
-          .rdma = {
-              .remote_addr = remote_addr,
-              .rkey = rkey
-          }
-      }
-  };
+  struct ibv_send_wr wr = {.wr_id = wr_id,
+                           .next = NULL,
+                           .sg_list = &sge,
+                           .num_sge = 1,
+                           .opcode = IBV_WR_RDMA_READ,
+                           .send_flags = 0,
+                           .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}};
 
   if (signaled) {
     wr.send_flags |= IBV_SEND_SIGNALED;
