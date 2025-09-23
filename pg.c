@@ -1207,7 +1207,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
     return pg_all_gather_eager(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
   }
 
-  return pg_all_gather_zero_copy_with_receive_buffer(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
+  return pg_all_gather_eager(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
 }
 
 int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
