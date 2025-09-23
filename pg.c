@@ -814,6 +814,12 @@ static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void
 
   memcpy(process_group->right_send_buffer, send_buffer, total_bytes);
 
+  void *reduced_chunk_tmp = malloc(chunk_bytes);
+  if (!reduced_chunk_tmp) {
+    fprintf(stderr, "[Process %d] ERROR: Failed to allocate reduce buffer for zero-copy reduce-scatter\n", process_rank);
+    return PG_ERROR;
+  }
+
   int steps = group_size - 1;
   int chunk_elements = (int)(chunk_bytes / element_size);
 
@@ -822,28 +828,32 @@ static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void
                                                         sizeof(pg_control_msg_t));
 
   const int right_neighbor = (process_rank + 1) % group_size;
+  size_t rank_chunk_offset = (size_t)process_rank * chunk_bytes;
+  size_t neighbor_chunk_offset = (size_t)right_neighbor * chunk_bytes;
 
   for (int step = 0; step < steps; ++step) {
     int send_chunk_index = (process_rank - step + group_size) % group_size;
-    int recv_chunk_index = (process_rank - step - 1 + group_size) % group_size;
 
     if (pg_post_control_receive(process_group, control_slot, (uint32_t)step) != PG_SUCCESS) {
+      free(reduced_chunk_tmp);
       return PG_ERROR;
     }
 
     size_t send_offset = (size_t)send_chunk_index * chunk_bytes;
     void *send_chunk_ptr = (char *)process_group->right_send_buffer + send_offset;
 
-    uint64_t remote_write_addr = process_group->rs_remote_buffer_addrs[right_neighbor] + send_offset;
+    uint64_t remote_write_addr = process_group->rs_remote_buffer_addrs[right_neighbor] + neighbor_chunk_offset;
     uint32_t remote_write_rkey = process_group->rs_remote_buffer_rkeys[right_neighbor];
 
     if (rdma_post_write_request(process_group->right_neighbor_qp, send_chunk_ptr, chunk_bytes,
                                 process_group->right_send_mr, remote_write_addr, remote_write_rkey,
                                 (uint64_t)(0xABC00000ULL | (uint64_t)step), 1) != 0) {
+      free(reduced_chunk_tmp);
       return PG_ERROR;
     }
 
     if (pg_post_control_send(process_group, (uint32_t)step, (uint32_t)send_chunk_index) != PG_SUCCESS) {
+      free(reduced_chunk_tmp);
       return PG_ERROR;
     }
 
@@ -854,12 +864,14 @@ static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void
     while (!write_done || !send_done || !recv_done) {
       struct ibv_wc work_completion;
       if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+        free(reduced_chunk_tmp);
         return PG_ERROR;
       }
 
       if (work_completion.status != IBV_WC_SUCCESS) {
         fprintf(stderr, "[Process %d] RDMA completion error (opcode %d, status %d)\n", process_rank,
                 work_completion.opcode, work_completion.status);
+        free(reduced_chunk_tmp);
         return PG_ERROR;
       }
 
@@ -881,26 +893,21 @@ static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void
       }
     }
 
-    uint32_t remote_chunk_index = control_slot->chunk_index;
-    if (remote_chunk_index >= (uint32_t)group_size) {
-      fprintf(stderr, "[Process %d] Invalid chunk index %u in control message at step %d\n", process_rank,
-              remote_chunk_index, step);
-      return PG_ERROR;
-    }
+    void *incoming_chunk_ptr = (char *)process_group->left_receive_buffer + rank_chunk_offset;
+    void *local_chunk_ptr = (char *)process_group->right_send_buffer + rank_chunk_offset;
 
-    size_t remote_offset = (size_t)remote_chunk_index * chunk_bytes;
-    size_t recv_offset = (size_t)recv_chunk_index * chunk_bytes;
-
-    void *incoming_chunk_ptr = (char *)process_group->left_receive_buffer + remote_offset;
-    void *local_chunk_ptr = (char *)process_group->right_send_buffer + recv_offset;
-
-    pg_apply_reduction_operation(local_chunk_ptr, local_chunk_ptr, incoming_chunk_ptr, chunk_elements, data_type,
+    memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_bytes);
+    pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, incoming_chunk_ptr, chunk_elements, data_type,
                                  reduction_op);
+
+    memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_bytes);
+    memcpy((char *)process_group->right_send_buffer + rank_chunk_offset, reduced_chunk_tmp, chunk_bytes);
   }
 
   size_t chunk_offset = (size_t)process_rank * chunk_bytes;
   memcpy(receive_buffer, (char *)process_group->right_send_buffer + chunk_offset, chunk_bytes);
 
+  free(reduced_chunk_tmp);
   return PG_SUCCESS;
 }
 
