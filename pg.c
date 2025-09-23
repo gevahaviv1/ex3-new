@@ -1227,22 +1227,29 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *rec
   size_t element_size = pg_get_datatype_element_size(data_type);
   int chunk_size = element_count / process_group->process_group_size;
 
-  /* Allocate temporary buffer for all-gather result */
-  void *temp_buffer = malloc(element_count * element_size);
-  if (!temp_buffer) {
-    fprintf(stderr, "All-reduce failed to allocate temporary buffer\n");
-    return PG_ERROR;
+  size_t chunk_bytes = (size_t)chunk_size * element_size;
+  void *gather_send_buffer = receive_buffer;
+
+  if (chunk_bytes > 0) {
+    gather_send_buffer = malloc(chunk_bytes);
+    if (!gather_send_buffer) {
+      fprintf(stderr, "All-reduce failed to allocate gather send buffer\n");
+      return PG_ERROR;
+    }
+    memcpy(gather_send_buffer, receive_buffer, chunk_bytes);
   }
 
-  if (pg_all_gather(process_group_handle, receive_buffer, temp_buffer, chunk_size, data_type) != PG_SUCCESS) {
+  if (pg_all_gather(process_group_handle, gather_send_buffer, receive_buffer, chunk_size, data_type) != PG_SUCCESS) {
     fprintf(stderr, "All-reduce failed during all-gather phase\n");
-    free(temp_buffer);
+    if (chunk_bytes > 0) {
+      free(gather_send_buffer);
+    }
     return PG_ERROR;
   }
 
-  /* Copy the complete result back to receive_buffer */
-  memcpy(receive_buffer, temp_buffer, element_count * element_size);
-  free(temp_buffer);
+  if (chunk_bytes > 0) {
+    free(gather_send_buffer);
+  }
 
   return PG_SUCCESS;
 }
