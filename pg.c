@@ -1062,101 +1062,62 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
     return PG_SUCCESS;
   }
 
-  /* Phase 1: Each process writes its data directly to all other processes using RDMA Write */
+  /* Simplified ring-based zero-copy all-gather using RDMA Write */
   int right_neighbor = (process_rank + 1) % group_size;
-  size_t my_chunk_offset = (size_t)process_rank * chunk_bytes;
   
-  /* Write my chunk to all other processes */
-  for (int target = 0; target < group_size; ++target) {
-    if (target == process_rank) continue; /* Skip self */
-    
-    uint64_t remote_write_addr = process_group->remote_buffer_addrs[target] + my_chunk_offset;
-    uint32_t remote_rkey = process_group->remote_buffer_rkeys[target];
-    
-    /* Use pipelined RDMA writes for large chunks */
-    size_t pipeline_chunk_size = process_group->chunk_size_bytes;
-    if (pipeline_chunk_size > chunk_bytes) pipeline_chunk_size = chunk_bytes;
-    
-    size_t bytes_written = 0;
-    int max_inflight = process_group->inflight > 0 ? process_group->inflight : 4;
-    int outstanding_writes = 0;
-    
-    while (bytes_written < chunk_bytes) {
-      /* Post writes up to max_inflight */
-      while (bytes_written < chunk_bytes && outstanding_writes < max_inflight) {
-        size_t this_write_size = PG_MIN(pipeline_chunk_size, chunk_bytes - bytes_written);
-        void *write_ptr = (char *)send_buffer + bytes_written;
-        uint64_t remote_addr = remote_write_addr + bytes_written;
-        uint64_t wr_id = (uint64_t)(1000 + target * 100 + outstanding_writes);
-        
-        if (rdma_post_write_request(process_group->right_neighbor_qp, write_ptr, this_write_size,
-                                    process_group->right_send_mr, remote_addr, remote_rkey, wr_id, 1) != 0) {
-          fprintf(stderr, "Failed to post pipelined RDMA write to process %d\n", target);
-          return PG_ERROR;
-        }
-        
-        bytes_written += this_write_size;
-        outstanding_writes++;
-      }
-      
-      /* Wait for at least one write to complete */
-      if (outstanding_writes > 0) {
-        struct ibv_wc work_completion;
-        if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
-          fprintf(stderr, "Failed to poll for RDMA write completion\n");
-          return PG_ERROR;
-        }
-        
-        if (work_completion.opcode == IBV_WC_RDMA_WRITE) {
-          outstanding_writes--;
-        }
-      }
-    }
-    
-    /* Wait for all remaining writes to this target to complete */
-    while (outstanding_writes > 0) {
-      struct ibv_wc work_completion;
-      if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
-        fprintf(stderr, "Failed to poll for remaining RDMA write completions\n");
-        return PG_ERROR;
-      }
-      
-      if (work_completion.opcode == IBV_WC_RDMA_WRITE) {
-        outstanding_writes--;
-      }
-    }
-  }
-
-  /* Phase 2: Synchronization barrier using inline SEND messages */
-  uint32_t sync_msg = 0xDEADBEEF;
+  /* Copy our data to the working buffer */
+  memcpy(process_group->right_send_buffer, final_base, total_bytes);
   
-  /* Post receive for sync message from left neighbor */
-  if (rdma_post_receive_request(process_group->left_neighbor_qp, process_group->left_receive_buffer,
-                                sizeof(sync_msg), process_group->left_receive_mr) != PG_SUCCESS) {
-    fprintf(stderr, "Failed to post sync receive\n");
-    return PG_ERROR;
-  }
-  
-  /* Send sync message to right neighbor */
-  if (rdma_post_send_inline(process_group->right_neighbor_qp, &sync_msg, sizeof(sync_msg), 
-                            (uint64_t)(2000 + process_rank)) != 0) {
-    fprintf(stderr, "Failed to post sync send\n");
-    return PG_ERROR;
-  }
-  
-  /* Wait for both sync operations to complete */
-  int sync_send_done = 0, sync_recv_done = 0;
-  while (!sync_send_done || !sync_recv_done) {
-    struct ibv_wc work_completion;
-    if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
-      fprintf(stderr, "Failed to poll for sync completion\n");
+  /* Ring algorithm: each step, write our current data to right neighbor */
+  for (int step = 0; step < steps; ++step) {
+    /* Determine which chunk we're sending in this step */
+    int send_chunk_owner = (process_rank - step + group_size) % group_size;
+    size_t send_chunk_offset = (size_t)send_chunk_owner * chunk_bytes;
+    void *send_chunk_ptr = (char *)process_group->right_send_buffer + send_chunk_offset;
+    
+    /* Write to right neighbor's buffer */
+    uint64_t remote_write_addr = process_group->remote_buffer_addrs[right_neighbor] + send_chunk_offset;
+    uint32_t remote_rkey = process_group->remote_buffer_rkeys[right_neighbor];
+    
+    /* Post RDMA Write */
+    if (rdma_post_write_request(process_group->right_neighbor_qp, send_chunk_ptr, chunk_bytes,
+                                process_group->right_send_mr, remote_write_addr, remote_rkey,
+                                (uint64_t)(100 + step), 1) != 0) {
+      fprintf(stderr, "Failed to post RDMA write for step %d\n", step);
       return PG_ERROR;
     }
     
-    if (work_completion.opcode == IBV_WC_SEND && !sync_send_done) {
-      sync_send_done = 1;
-    } else if (work_completion.opcode == IBV_WC_RECV && !sync_recv_done) {
-      sync_recv_done = 1;
+    /* Post receive for data from left neighbor */
+    if (rdma_post_receive_request(process_group->left_neighbor_qp, process_group->left_receive_buffer,
+                                  chunk_bytes, process_group->left_receive_mr) != PG_SUCCESS) {
+      fprintf(stderr, "Failed to post receive for step %d\n", step);
+      return PG_ERROR;
+    }
+    
+    /* Wait for both operations to complete */
+    int write_done = 0, recv_done = 0;
+    while (!write_done || !recv_done) {
+      struct ibv_wc work_completion;
+      if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+        fprintf(stderr, "Failed to poll completion for step %d\n", step);
+        return PG_ERROR;
+      }
+      
+      if (work_completion.opcode == IBV_WC_RDMA_WRITE && !write_done) {
+        write_done = 1;
+      } else if (work_completion.opcode == IBV_WC_RECV && !recv_done) {
+        recv_done = 1;
+        
+        /* Update working buffer with received chunk */
+        int recv_chunk_owner = (process_rank - step - 1 + group_size) % group_size;
+        size_t recv_chunk_offset = (size_t)recv_chunk_owner * chunk_bytes;
+        void *recv_chunk_ptr = (char *)process_group->right_send_buffer + recv_chunk_offset;
+        memcpy(recv_chunk_ptr, process_group->left_receive_buffer, chunk_bytes);
+        
+        /* Also update final result buffer */
+        void *final_chunk_ptr = final_base + recv_chunk_offset;
+        memcpy(final_chunk_ptr, process_group->left_receive_buffer, chunk_bytes);
+      }
     }
   }
 
