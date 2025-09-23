@@ -1062,25 +1062,22 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
     return PG_SUCCESS;
   }
 
-  /* Ring-based zero-copy all-gather using RDMA Write operations */
+  /* Pure final buffer zero-copy all-gather using RDMA Write operations */
   int right_neighbor = (process_rank + 1) % group_size;
   
-  /* Copy all data to working buffer for ring circulation */
-  memcpy(process_group->right_send_buffer, final_base, total_bytes);
-  
-  /* Ring algorithm: circulate chunks using RDMA Write + SEND coordination */
+  /* Ring algorithm: each step, send current chunk to right neighbor */
   for (int step = 0; step < steps; ++step) {
     /* Determine which chunk we're sending in this step */
     int send_chunk_owner = (process_rank - step + group_size) % group_size;
     size_t send_chunk_offset = (size_t)send_chunk_owner * chunk_bytes;
-    void *send_chunk_ptr = (char *)process_group->right_send_buffer + send_chunk_offset;
+    void *send_chunk_ptr = final_base + send_chunk_offset;
     
-    /* Write chunk to right neighbor using RDMA Write */
+    /* Write chunk to right neighbor's final buffer using RDMA Write */
     uint64_t remote_write_addr = process_group->remote_buffer_addrs[right_neighbor] + send_chunk_offset;
     uint32_t remote_rkey = process_group->remote_buffer_rkeys[right_neighbor];
     
     if (rdma_post_write_request(process_group->right_neighbor_qp, send_chunk_ptr, chunk_bytes,
-                                process_group->right_send_mr, remote_write_addr, remote_rkey,
+                                process_group->final_recv_mr, remote_write_addr, remote_rkey,
                                 (uint64_t)(100 + step), 1) != 0) {
       fprintf(stderr, "Failed to post RDMA write for step %d\n", step);
       return PG_ERROR;
@@ -1116,15 +1113,7 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
         send_done = 1;
       } else if (work_completion.opcode == IBV_WC_RECV && !recv_done) {
         recv_done = 1;
-        
-        /* Update working buffer with received chunk from left neighbor */
-        int recv_chunk_owner = (process_rank - step - 1 + group_size) % group_size;
-        size_t recv_chunk_offset = (size_t)recv_chunk_owner * chunk_bytes;
-        void *recv_chunk_ptr = (char *)process_group->right_send_buffer + recv_chunk_offset;
-        void *final_chunk_ptr = final_base + recv_chunk_offset;
-        
-        /* Copy from remote write location to working buffer and final buffer */
-        memcpy(recv_chunk_ptr, final_chunk_ptr, chunk_bytes);
+        /* Notification received - remote write to our final buffer completed */
       }
     }
   }
@@ -1207,7 +1196,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
     return pg_all_gather_eager(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
   }
 
-  return pg_all_gather_eager(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
+  return pg_all_gather_zero_copy_with_receive_buffer(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
 }
 
 int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
