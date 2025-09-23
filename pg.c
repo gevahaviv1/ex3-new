@@ -828,9 +828,6 @@ static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void
                                                         sizeof(pg_control_msg_t));
 
   const int right_neighbor = (process_rank + 1) % group_size;
-  size_t rank_chunk_offset = (size_t)process_rank * chunk_bytes;
-  size_t neighbor_chunk_offset = (size_t)right_neighbor * chunk_bytes;
-
   for (int step = 0; step < steps; ++step) {
     int send_chunk_index = (process_rank - step + group_size) % group_size;
 
@@ -842,7 +839,7 @@ static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void
     size_t send_offset = (size_t)send_chunk_index * chunk_bytes;
     void *send_chunk_ptr = (char *)process_group->right_send_buffer + send_offset;
 
-    uint64_t remote_write_addr = process_group->rs_remote_buffer_addrs[right_neighbor] + neighbor_chunk_offset;
+    uint64_t remote_write_addr = process_group->rs_remote_buffer_addrs[right_neighbor] + send_offset;
     uint32_t remote_write_rkey = process_group->rs_remote_buffer_rkeys[right_neighbor];
 
     if (rdma_post_write_request(process_group->right_neighbor_qp, send_chunk_ptr, chunk_bytes,
@@ -893,15 +890,24 @@ static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void
       }
     }
 
-    void *incoming_chunk_ptr = (char *)process_group->left_receive_buffer + rank_chunk_offset;
-    void *local_chunk_ptr = (char *)process_group->right_send_buffer + rank_chunk_offset;
+    uint32_t received_chunk_index = control_slot->chunk_index;
+    if (received_chunk_index >= (uint32_t)group_size) {
+      fprintf(stderr, "[Process %d] Invalid chunk index %u in control message at step %d\n", process_rank,
+              received_chunk_index, step);
+      free(reduced_chunk_tmp);
+      return PG_ERROR;
+    }
+
+    size_t received_offset = (size_t)received_chunk_index * chunk_bytes;
+    void *incoming_chunk_ptr = (char *)process_group->left_receive_buffer + received_offset;
+    void *local_chunk_ptr = (char *)process_group->right_send_buffer + received_offset;
 
     memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_bytes);
     pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, incoming_chunk_ptr, chunk_elements, data_type,
                                  reduction_op);
 
     memcpy(process_group->right_send_buffer, process_group->left_receive_buffer, total_bytes);
-    memcpy((char *)process_group->right_send_buffer + rank_chunk_offset, reduced_chunk_tmp, chunk_bytes);
+    memcpy((char *)process_group->right_send_buffer + received_offset, reduced_chunk_tmp, chunk_bytes);
   }
 
   size_t chunk_offset = (size_t)process_rank * chunk_bytes;
