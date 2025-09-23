@@ -880,6 +880,11 @@ static int pg_all_gather_eager(pg_handle_internal_t *process_group, void *send_b
     return PG_SUCCESS;
   }
 
+  /* Initialize the ring buffer with our data at the correct position */
+  memset(process_group->right_send_buffer, 0, total_bytes);
+  char *my_chunk_position = (char *)process_group->right_send_buffer + (process_rank * chunk_bytes);
+  memcpy(my_chunk_position, send_buffer, chunk_bytes);
+
   void *tmp_chunk = malloc(chunk_bytes);
   if (!tmp_chunk) {
     fprintf(stderr, "[Process %d] ERROR: Failed to allocate temp buffer for all-gather\n", process_rank);
@@ -1040,6 +1045,11 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
     memset((void *)(uintptr_t)process_group->final_recv_base, 0, total_bytes);
     return PG_SUCCESS;
   }
+
+  /* Initialize the final receive buffer with our data at the correct position */
+  memset((void *)(uintptr_t)process_group->final_recv_base, 0, total_bytes);
+  char *my_chunk_position = (char *)(uintptr_t)process_group->final_recv_base + (process_rank * chunk_bytes);
+  memcpy(my_chunk_position, send_buffer, chunk_bytes);
 
   if (chunk_bytes * (size_t)group_size != total_bytes) {
     fprintf(stderr, "All-gather requires equal chunks across ranks\n");
