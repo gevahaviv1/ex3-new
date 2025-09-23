@@ -1153,6 +1153,21 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
   return PG_SUCCESS;
 }
 
+static int pg_all_gather_zero_copy_with_receive_buffer(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer, size_t total_bytes, size_t chunk_bytes) {
+  /* First call the original zero-copy function */
+  int result = pg_all_gather_zero_copy(process_group, send_buffer, total_bytes, chunk_bytes);
+  if (result != PG_SUCCESS) {
+    return result;
+  }
+  
+  /* Copy the final result from final_recv_base to receive_buffer if they're different */
+  if ((void *)(uintptr_t)process_group->final_recv_base != receive_buffer) {
+    memcpy(receive_buffer, (void *)(uintptr_t)process_group->final_recv_base, total_bytes);
+  }
+  
+  return PG_SUCCESS;
+}
+
 int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
                   pg_datatype_t data_type) {
   pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
@@ -1218,7 +1233,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
     return pg_all_gather_eager(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
   }
 
-  return pg_all_gather_zero_copy(process_group, send_buffer, total_bytes, chunk_bytes);
+  return pg_all_gather_zero_copy_with_receive_buffer(process_group, send_buffer, receive_buffer, total_bytes, chunk_bytes);
 }
 
 int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *receive_buffer, int element_count,
