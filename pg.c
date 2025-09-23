@@ -1186,18 +1186,12 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
   }
 
   size_t elem_sz = pg_get_datatype_element_size(data_type);
-  size_t total_bytes = (size_t)element_count * elem_sz;
+  size_t chunk_bytes = (size_t)element_count * elem_sz;
+  size_t total_bytes = chunk_bytes * (size_t)group_size;
 
-  if (total_bytes == 0) {
+  if (chunk_bytes == 0) {
     return PG_SUCCESS;
   }
-
-  if ((size_t)group_size == 0 || total_bytes % (size_t)group_size != 0) {
-    fprintf(stderr, "All-gather requires total data divisible by process count\n");
-    return PG_ERROR;
-  }
-
-  size_t chunk_bytes = total_bytes / (size_t)group_size;
 
   uint64_t recv_base = (uint64_t)(uintptr_t)receive_buffer;
   int needs_registration = 0;
