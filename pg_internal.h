@@ -97,6 +97,12 @@ struct pg_handle_internal {
   uint64_t *remote_buffer_addrs;  /* Array of remote buffer addresses for each process */
   uint32_t *remote_buffer_rkeys;  /* Array of remote buffer rkeys for each process */
   size_t remote_buffer_size;      /* Size of each remote buffer */
+
+  /* Reduce-scatter specific remote buffer exposure */
+  uint64_t *rs_remote_buffer_addrs; /* Remote addresses for left_receive_buffer exposures */
+  uint32_t *rs_remote_buffer_rkeys; /* Remote rkeys for reduce-scatter writes */
+  size_t rs_remote_buffer_size;     /* Size of reduce-scatter remote buffer */
+  int rs_remote_info_ready;         /* Flag indicating remote info has been exchanged */
 };
 
 /*

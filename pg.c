@@ -480,6 +480,91 @@ static int initialize_remote_memory_info(pg_handle_internal_t *process_group) {
   return PG_SUCCESS;
 }
 
+static int pg_prepare_reduce_scatter_remote_info(pg_handle_internal_t *process_group) {
+  size_t required_size = process_group->total_buffer_size_bytes;
+
+  if (process_group->rs_remote_info_ready && process_group->rs_remote_buffer_size >= required_size) {
+    return PG_SUCCESS;
+  }
+
+  int world_size = process_group->process_group_size;
+  if (!process_group->rs_remote_buffer_addrs) {
+    process_group->rs_remote_buffer_addrs = calloc(world_size, sizeof(uint64_t));
+    process_group->rs_remote_buffer_rkeys = calloc(world_size, sizeof(uint32_t));
+    if (!process_group->rs_remote_buffer_addrs || !process_group->rs_remote_buffer_rkeys) {
+      free(process_group->rs_remote_buffer_addrs);
+      free(process_group->rs_remote_buffer_rkeys);
+      process_group->rs_remote_buffer_addrs = NULL;
+      process_group->rs_remote_buffer_rkeys = NULL;
+      return PG_ERROR;
+    }
+  }
+
+  uint64_t *saved_addrs = process_group->remote_buffer_addrs;
+  uint32_t *saved_rkeys = process_group->remote_buffer_rkeys;
+  size_t saved_size = process_group->remote_buffer_size;
+  uint64_t saved_left_base = process_group->left_remote_base;
+  uint32_t saved_left_rkey = process_group->left_remote_rkey;
+  uint64_t saved_right_base = process_group->right_remote_base;
+  uint32_t saved_right_rkey = process_group->right_remote_rkey;
+
+  process_group->remote_buffer_addrs = process_group->rs_remote_buffer_addrs;
+  process_group->remote_buffer_rkeys = process_group->rs_remote_buffer_rkeys;
+
+  int result = pg_exchange_allgather_mr(process_group,
+                                        (uint64_t)(uintptr_t)process_group->left_receive_buffer,
+                                        process_group->left_receive_mr->rkey, required_size);
+
+  if (result == PG_SUCCESS) {
+    process_group->rs_remote_buffer_size = process_group->remote_buffer_size;
+    process_group->rs_remote_info_ready = 1;
+  }
+
+  process_group->remote_buffer_addrs = saved_addrs;
+  process_group->remote_buffer_rkeys = saved_rkeys;
+  process_group->remote_buffer_size = saved_size;
+  process_group->left_remote_base = saved_left_base;
+  process_group->left_remote_rkey = saved_left_rkey;
+  process_group->right_remote_base = saved_right_base;
+  process_group->right_remote_rkey = saved_right_rkey;
+
+  return result;
+}
+
+typedef struct {
+  uint32_t step;
+  uint32_t chunk_index;
+} pg_control_msg_t;
+
+static int pg_post_control_receive(pg_handle_internal_t *process_group, pg_control_msg_t *slot, uint32_t step) {
+  struct ibv_sge sge = {
+      .addr = (uintptr_t)slot,
+      .length = sizeof(*slot),
+      .lkey = process_group->left_receive_mr->lkey,
+  };
+
+  struct ibv_recv_wr wr = {
+      .wr_id = WRID_CTRL(step),
+      .sg_list = &sge,
+      .num_sge = 1,
+  };
+
+  struct ibv_recv_wr *bad_wr = NULL;
+  int result = ibv_post_recv(process_group->left_neighbor_qp, &wr, &bad_wr);
+  if (result != 0) {
+    fprintf(stderr, "Failed to post control receive for step %u\n", step);
+    return PG_ERROR;
+  }
+
+  return PG_SUCCESS;
+}
+
+static int pg_post_control_send(pg_handle_internal_t *process_group, uint32_t step, uint32_t chunk_index) {
+  pg_control_msg_t message = {.step = step, .chunk_index = chunk_index};
+
+  return rdma_post_send_inline(process_group->right_neighbor_qp, &message, sizeof(message), WRID_CTRL_SEND(step));
+}
+
 /*
  * =============================================================================
  * Process Group Lifecycle Management Implementation
@@ -604,6 +689,9 @@ int pg_cleanup(pg_handle_t process_group_handle) {
   free(process_group->remote_buffer_addrs);
   free(process_group->remote_buffer_rkeys);
 
+  free(process_group->rs_remote_buffer_addrs);
+  free(process_group->rs_remote_buffer_rkeys);
+
   /* Free hostname list */
   pgnet_free_hostname_list(process_group->hostname_list, process_group->process_group_size);
 
@@ -686,6 +774,136 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group, 
 /**
  * Pipelined reduce-scatter with overlapped communication and computation
  */
+static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
+                                       int element_count, pg_datatype_t data_type, pg_operation_t reduction_op) {
+  int group_size = process_group->process_group_size;
+  int process_rank = process_group->process_rank;
+
+  if (group_size <= 0) {
+    return PG_ERROR;
+  }
+
+  if (group_size == 1) {
+    size_t element_size_single = pg_get_datatype_element_size(data_type);
+    memcpy(receive_buffer, send_buffer, (size_t)element_count * element_size_single);
+    return PG_SUCCESS;
+  }
+
+  size_t element_size = pg_get_datatype_element_size(data_type);
+  size_t total_bytes = (size_t)element_count * element_size;
+  if (total_bytes == 0) {
+    return PG_SUCCESS;
+  }
+
+  size_t chunk_bytes = (size_t)(element_count / group_size) * element_size;
+  if (chunk_bytes == 0) {
+    return PG_ERROR;
+  }
+
+  if (pg_prepare_reduce_scatter_remote_info(process_group) != PG_SUCCESS) {
+    return PG_ERROR;
+  }
+
+  if (total_bytes + sizeof(pg_control_msg_t) > process_group->total_buffer_size_bytes) {
+    return PG_ERROR;
+  }
+
+  if (chunk_bytes * (size_t)group_size > process_group->rs_remote_buffer_size) {
+    return PG_ERROR;
+  }
+
+  memcpy(process_group->right_send_buffer, send_buffer, total_bytes);
+
+  int steps = group_size - 1;
+  int chunk_elements = (int)(chunk_bytes / element_size);
+
+  pg_control_msg_t *control_slot = (pg_control_msg_t *)((char *)process_group->left_receive_buffer +
+                                                        (size_t)process_group->total_buffer_size_bytes -
+                                                        sizeof(pg_control_msg_t));
+
+  const int right_neighbor = (process_rank + 1) % group_size;
+
+  for (int step = 0; step < steps; ++step) {
+    int send_chunk_index = (process_rank - step + group_size) % group_size;
+    int recv_chunk_index = (process_rank - step - 1 + group_size) % group_size;
+
+    if (pg_post_control_receive(process_group, control_slot, (uint32_t)step) != PG_SUCCESS) {
+      return PG_ERROR;
+    }
+
+    size_t send_offset = (size_t)send_chunk_index * chunk_bytes;
+    void *send_chunk_ptr = (char *)process_group->right_send_buffer + send_offset;
+
+    uint64_t remote_write_addr = process_group->rs_remote_buffer_addrs[right_neighbor] + send_offset;
+    uint32_t remote_write_rkey = process_group->rs_remote_buffer_rkeys[right_neighbor];
+
+    if (rdma_post_write_request(process_group->right_neighbor_qp, send_chunk_ptr, chunk_bytes,
+                                process_group->right_send_mr, remote_write_addr, remote_write_rkey,
+                                (uint64_t)(0xABC00000ULL | (uint64_t)step), 1) != 0) {
+      return PG_ERROR;
+    }
+
+    if (pg_post_control_send(process_group, (uint32_t)step, (uint32_t)send_chunk_index) != PG_SUCCESS) {
+      return PG_ERROR;
+    }
+
+    int write_done = 0;
+    int send_done = 0;
+    int recv_done = 0;
+
+    while (!write_done || !send_done || !recv_done) {
+      struct ibv_wc work_completion;
+      if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+        return PG_ERROR;
+      }
+
+      if (work_completion.status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "[Process %d] RDMA completion error (opcode %d, status %d)\n", process_rank,
+                work_completion.opcode, work_completion.status);
+        return PG_ERROR;
+      }
+
+      switch (work_completion.opcode) {
+        case IBV_WC_RDMA_WRITE:
+          write_done = 1;
+          break;
+        case IBV_WC_SEND:
+          send_done = 1;
+          break;
+        case IBV_WC_RECV:
+          if (WRID_KIND(work_completion.wr_id) == WRK_CTRL &&
+              WRID_CTRL_STEP(work_completion.wr_id) == (uint32_t)step) {
+            recv_done = 1;
+          }
+          break;
+        default:
+          break;
+      }
+    }
+
+    uint32_t remote_chunk_index = control_slot->chunk_index;
+    if (remote_chunk_index >= (uint32_t)group_size) {
+      fprintf(stderr, "[Process %d] Invalid chunk index %u in control message at step %d\n", process_rank,
+              remote_chunk_index, step);
+      return PG_ERROR;
+    }
+
+    size_t remote_offset = (size_t)remote_chunk_index * chunk_bytes;
+    size_t recv_offset = (size_t)recv_chunk_index * chunk_bytes;
+
+    void *incoming_chunk_ptr = (char *)process_group->left_receive_buffer + remote_offset;
+    void *local_chunk_ptr = (char *)process_group->right_send_buffer + recv_offset;
+
+    pg_apply_reduction_operation(local_chunk_ptr, local_chunk_ptr, incoming_chunk_ptr, chunk_elements, data_type,
+                                 reduction_op);
+  }
+
+  size_t chunk_offset = (size_t)process_rank * chunk_bytes;
+  memcpy(receive_buffer, (char *)process_group->right_send_buffer + chunk_offset, chunk_bytes);
+
+  return PG_SUCCESS;
+}
+
 static int pg_reduce_scatter_pipelined(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
                                        int element_count, pg_datatype_t data_type, pg_operation_t reduction_op) {
   int group_size = process_group->process_group_size;
@@ -730,21 +948,6 @@ static int pg_reduce_scatter_pipelined(pg_handle_internal_t *process_group, void
   /* Perform reduce-scatter algorithm with (group_size - 1) steps */
   for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
     int reduction_chunk_index = process_rank;
-
-    int send_chunk_index = (process_rank - communication_step + group_size) % group_size;
-    int recv_chunk_index = (process_rank - communication_step - 1 + group_size) % group_size;
-
-    double send_sample = 0.0;
-    double local_before_sample = 0.0;
-    int can_sample = (data_type == PG_DATATYPE_DOUBLE && chunk_size_bytes >= sizeof(double));
-    if (can_sample) {
-      double *send_ptr =
-          (double *)((char *)process_group->right_send_buffer + ((size_t)send_chunk_index * chunk_size_bytes));
-      double *local_ptr =
-          (double *)((char *)process_group->right_send_buffer + ((size_t)reduction_chunk_index * chunk_size_bytes));
-      send_sample = send_ptr[0];
-      local_before_sample = local_ptr[0];
-    }
 
     /* Pipeline the communication for this step */
     for (int pipeline_chunk = 0; pipeline_chunk < num_pipeline_chunks; pipeline_chunk += max_inflight) {
@@ -793,27 +996,8 @@ static int pg_reduce_scatter_pipelined(pg_handle_internal_t *process_group, void
     /* Reduce into temp buffer to avoid being clobbered by the buffer swap */
     memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_size_bytes);
 
-    double remote_sample = 0.0;
-    if (can_sample) {
-      remote_sample = ((double *)remote_chunk_ptr)[0];
-    }
-
     pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, remote_chunk_ptr, chunk_element_count, data_type,
                                  reduction_op);
-
-    if (can_sample) {
-      double after_reduce = ((double *)reduced_chunk_tmp)[0];
-      printf(
-          "[Process %d] RS step %d: send_chunk %d sample %.1f, recv_chunk %d sample %.1f, local_before %.1f -> "
-          "reduced %.1f\n",
-          process_rank, communication_step, send_chunk_index, send_sample, recv_chunk_index, remote_sample,
-          local_before_sample, after_reduce);
-      fflush(stdout);
-    } else {
-      printf("[Process %d] RS step %d: send_chunk %d, recv_chunk %d\n", process_rank, communication_step,
-             send_chunk_index, recv_chunk_index);
-      fflush(stdout);
-    }
 
     /* Prepare data for next communication step */
     void *tmp_buffer = process_group->right_send_buffer;
@@ -951,6 +1135,11 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void 
   if (total_data_size <= process_group->eager_max) {
     /* Use eager path for small messages */
     return pg_reduce_scatter_eager(process_group, send_buffer, receive_buffer, element_count, data_type, reduction_op);
+  }
+
+  if (pg_reduce_scatter_zero_copy(process_group, send_buffer, receive_buffer, element_count, data_type, reduction_op) ==
+      PG_SUCCESS) {
+    return PG_SUCCESS;
   }
 
   /* Use pipelined path for large messages */
