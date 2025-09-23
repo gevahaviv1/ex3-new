@@ -1062,7 +1062,7 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
   }
 
   char *final_base = (char *)(uintptr_t)process_group->final_recv_base;
-  memmove(final_base + ((size_t)process_rank * chunk_bytes), send_buffer, chunk_bytes);
+  // Local data already copied above at line 1051-1052, no need to duplicate
 
   const int steps = group_size - 1;
   if (steps <= 0) {
@@ -1114,12 +1114,12 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
         size_t segment_offset = posted_segments * seg_bytes;
         size_t segment_length = PG_MIN(seg_bytes, chunk_bytes - segment_offset);
         void *local_ptr = final_base + chunk_offset + segment_offset;
-        uint64_t remote_addr = process_group->left_remote_base + chunk_offset + segment_offset;
+        uint64_t remote_addr = process_group->remote_buffer_addrs[chunk_owner] + chunk_offset + segment_offset;
         uint64_t wr_id = WRID_READ(chunk_owner, (uint32_t)segment_offset);
 
         if (rdma_post_read_request(process_group->left_neighbor_qp, local_ptr, segment_length,
-                                   process_group->final_recv_mr, remote_addr, process_group->left_remote_rkey, wr_id,
-                                   1) != 0) {
+                                   process_group->final_recv_mr, remote_addr,
+                                   process_group->remote_buffer_rkeys[chunk_owner], wr_id, 1) != 0) {
           return PG_ERROR;
         }
 
@@ -1153,18 +1153,19 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
   return PG_SUCCESS;
 }
 
-static int pg_all_gather_zero_copy_with_receive_buffer(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer, size_t total_bytes, size_t chunk_bytes) {
+static int pg_all_gather_zero_copy_with_receive_buffer(pg_handle_internal_t *process_group, void *send_buffer,
+                                                       void *receive_buffer, size_t total_bytes, size_t chunk_bytes) {
   /* First call the original zero-copy function */
   int result = pg_all_gather_zero_copy(process_group, send_buffer, total_bytes, chunk_bytes);
   if (result != PG_SUCCESS) {
     return result;
   }
-  
+
   /* Copy the final result from final_recv_base to receive_buffer if they're different */
   if ((void *)(uintptr_t)process_group->final_recv_base != receive_buffer) {
     memcpy(receive_buffer, (void *)(uintptr_t)process_group->final_recv_base, total_bytes);
   }
-  
+
   return PG_SUCCESS;
 }
 
@@ -1219,7 +1220,7 @@ int pg_all_gather(pg_handle_t process_group_handle, void *send_buffer, void *rec
   process_group->final_recv_bytes = total_bytes;
 
   if (pg_exchange_allgather_mr(process_group, process_group->final_recv_base, process_group->final_recv_mr->rkey,
-                               total_bytes) != PG_SUCCESS) {
+                              total_bytes) != PG_SUCCESS) {
     return PG_ERROR;
   }
 
