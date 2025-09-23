@@ -1072,12 +1072,12 @@ static int pg_all_gather_zero_copy(pg_handle_internal_t *process_group, void *se
     size_t send_chunk_offset = (size_t)send_chunk_owner * chunk_bytes;
     void *send_chunk_ptr = final_base + send_chunk_offset;
     
-    /* Determine where this chunk should go in right neighbor's buffer */
-    int recv_chunk_owner = (process_rank - step - 1 + group_size) % group_size;
-    size_t recv_chunk_offset = (size_t)recv_chunk_owner * chunk_bytes;
+    /* Determine where the right neighbor stores this chunk (same layout on every rank) */
+    int remote_chunk_index = send_chunk_owner;
+    size_t remote_chunk_offset = (size_t)remote_chunk_index * chunk_bytes;
     
     /* RDMA Write: High-performance data transfer */
-    uint64_t remote_write_addr = process_group->remote_buffer_addrs[right_neighbor] + recv_chunk_offset;
+    uint64_t remote_write_addr = process_group->remote_buffer_addrs[right_neighbor] + remote_chunk_offset;
     uint32_t remote_rkey = process_group->remote_buffer_rkeys[right_neighbor];
     
     if (rdma_post_write_request(process_group->right_neighbor_qp, send_chunk_ptr, chunk_bytes,
