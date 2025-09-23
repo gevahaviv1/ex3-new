@@ -319,7 +319,7 @@ static int test_all_gather(pg_handle_t process_group, int process_rank, int num_
     send_data[i] = (double)(process_rank * 1000 + i + 1);
   }
 
-  if (pg_all_gather(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE) != PG_SUCCESS) {
+  if (pg_all_gather(process_group, send_data, recv_data, chunk_size, PG_DATATYPE_DOUBLE) != PG_SUCCESS) {
     fprintf(stderr, "[Process %d] All-gather warm-up failed\n", process_rank);
     free(send_data);
     free(recv_data);
@@ -335,7 +335,7 @@ static int test_all_gather(pg_handle_t process_group, int process_rank, int num_
   double start_time = get_time_microseconds();
 
   // Perform all-gather
-  int result = pg_all_gather(process_group, send_data, recv_data, TEST_DATA_SIZE, PG_DATATYPE_DOUBLE);
+  int result = pg_all_gather(process_group, send_data, recv_data, chunk_size, PG_DATATYPE_DOUBLE);
 
   double end_time = get_time_microseconds();
   double elapsed_ms = (end_time - start_time) / 1000.0;
