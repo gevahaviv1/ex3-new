@@ -22,13 +22,13 @@
 #define RDMA_DEFAULT_INLINE_DATA_SIZE 64 /* Maximum inline data size in bytes */
 
 /* Completion Queue Configuration */
-#define RDMA_DEFAULT_CQ_ENTRIES 128 /* Number of completion queue entries */
+#define RDMA_DEFAULT_CQ_ENTRIES 64 /* Number of completion queue entries */
 
 /* Queue Pair Configuration */
-#define RDMA_DEFAULT_QP_SEND_WR   64           /* Maximum outstanding send work requests */
-#define RDMA_DEFAULT_QP_RECV_WR   64           /* Maximum outstanding receive work requests */
+#define RDMA_DEFAULT_QP_SEND_WR   32           /* Maximum outstanding send work requests */
+#define RDMA_DEFAULT_QP_RECV_WR   32           /* Maximum outstanding receive work requests */
 #define RDMA_DEFAULT_QP_SGE_COUNT 1            /* Number of scatter-gather elements per WR */
-#define RDMA_DEFAULT_MTU          IBV_MTU_4096 /* Maximum transmission unit */
+#define RDMA_DEFAULT_MTU          IBV_MTU_2048 /* Maximum transmission unit */
 
 /* QP State Transition Parameters */
 #define RDMA_DEFAULT_TIMEOUT     14 /* Local ACK timeout (4.096us * 2^timeout) */
@@ -42,16 +42,16 @@
  * Buffer Management
  * Memory allocation and data transfer configuration
  */
-#define PG_BUFFER_SIZE_BYTES (128 * 1024 * 1024) /* 128MB buffer for collective operations */
-#define PG_CHUNK_SIZE_BYTES  (2048 * 1024)       /* 2MB chunks for pipelined transfers */
+#define PG_BUFFER_SIZE_BYTES (64 * 1024 * 1024) /* 64MB buffer for collective operations */
+#define PG_CHUNK_SIZE_BYTES  (1024 * 1024)      /* 1MB chunks for pipelined transfers */
 
 /*
  * Pipelining Configuration
  * Parameters for overlapping communication and computation
  */
-#define PG_DEFAULT_EAGER_MAX   (64 * 1024)   /* Maximum message size for eager protocol */
-#define PG_DEFAULT_CHUNK_BYTES (2048 * 1024) /* Default chunk size for pipelining */
-#define PG_DEFAULT_INFLIGHT    32            /* Default maximum inflight operations */
+#define PG_DEFAULT_EAGER_MAX   (128 * 1024)  /* Maximum message size for eager protocol */
+#define PG_DEFAULT_CHUNK_BYTES (1024 * 1024) /* Default chunk size for pipelining */
+#define PG_DEFAULT_INFLIGHT    24            /* Default maximum inflight operations */
 
 /*
  * Packet Sequence Number Generation
