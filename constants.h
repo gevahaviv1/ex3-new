@@ -49,7 +49,7 @@
  * Pipelining Configuration
  * Parameters for overlapping communication and computation
  */
-#define PG_DEFAULT_EAGER_MAX   (64 * 1024 * 1024) /* Maximum message size for eager protocol */
+#define PG_DEFAULT_EAGER_MAX   (256 * 1024 * 1024) /* Maximum message size for eager protocol */
 #define PG_DEFAULT_CHUNK_BYTES (1024 * 1024)      /* Default chunk size for pipelining */
 #define PG_DEFAULT_INFLIGHT    24                 /* Default maximum inflight operations */
 
