@@ -36,7 +36,7 @@
 #define RDMA_DEFAULT_RNR_RETRY   7  /* Number of RNR (Receiver Not Ready) retries */
 
 #define RDMA_DEFAULT_MIN_RNR_TIMER 12 /* Minimum RNR NAK timer */
-#define RDMA_DEFAULT_MAX_RD_ATOMIC 4  /* Maximum outstanding RDMA read/atomic ops */
+#define RDMA_DEFAULT_MAX_RD_ATOMIC 16 /* Maximum outstanding RDMA read/atomic ops */
 
 /*
  * Buffer Management
@@ -49,9 +49,9 @@
  * Pipelining Configuration
  * Parameters for overlapping communication and computation
  */
-#define PG_DEFAULT_EAGER_MAX (256 * 1024)   /* Maximum message size for eager protocol */
+#define PG_DEFAULT_EAGER_MAX   (256 * 1024)  /* Maximum message size for eager protocol */
 #define PG_DEFAULT_CHUNK_BYTES (1024 * 1024) /* Default chunk size for pipelining */
-#define PG_DEFAULT_INFLIGHT 16      /* Default maximum inflight operations */
+#define PG_DEFAULT_INFLIGHT    16            /* Default maximum inflight operations */
 
 /*
  * Packet Sequence Number Generation
@@ -110,19 +110,19 @@
 
 /* Work Request identification helpers */
 #define WRID_KIND_SHIFT 56
-#define WRK_READ 1u
-#define WRK_CTRL 2u
-#define WRK_CTRL_SEND 3u
+#define WRK_READ        1u
+#define WRK_CTRL        2u
+#define WRK_CTRL_SEND   3u
 
 #define WRID_KIND(wrid) ((uint8_t)(((uint64_t)(wrid)) >> WRID_KIND_SHIFT))
 
-#define WRID_READ(idx, off) \
+#define WRID_READ(idx, off)                                                                  \
   ((((uint64_t)WRK_READ) << WRID_KIND_SHIFT) | ((((uint64_t)(idx)) & 0x00FFFFFFULL) << 32) | \
    (((uint64_t)(off)) & 0xFFFFFFFFULL))
-#define WRID_READ_INDEX(wrid) ((uint32_t)((((uint64_t)(wrid)) >> 32) & 0x00FFFFFFULL))
+#define WRID_READ_INDEX(wrid)  ((uint32_t)((((uint64_t)(wrid)) >> 32) & 0x00FFFFFFULL))
 #define WRID_READ_OFFSET(wrid) ((uint32_t)((uint64_t)(wrid) & 0xFFFFFFFFULL))
 
-#define WRID_CTRL(step) ((((uint64_t)WRK_CTRL) << WRID_KIND_SHIFT) | ((uint64_t)(step) & 0x00FFFFFFFFFFFFFFULL))
+#define WRID_CTRL(step)      ((((uint64_t)WRK_CTRL) << WRID_KIND_SHIFT) | ((uint64_t)(step) & 0x00FFFFFFFFFFFFFFULL))
 #define WRID_CTRL_STEP(wrid) ((uint32_t)((uint64_t)(wrid) & 0xFFFFFFFFULL))
 
 #define WRID_CTRL_SEND(step) \
