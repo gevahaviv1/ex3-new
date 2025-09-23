@@ -683,6 +683,129 @@ static int perform_ring_communication_step(pg_handle_internal_t *process_group, 
  * =============================================================================
  */
 
+typedef struct pg_control_msg {
+  uint32_t step;
+  uint32_t chunk_index;
+} pg_control_msg_t;
+
+static int pg_post_control_receive(pg_handle_internal_t *process_group, pg_control_msg_t *slot, uint32_t step);
+static int pg_post_control_send(pg_handle_internal_t *process_group, uint32_t step, uint32_t chunk_index);
+
+/**
+ * Zero-copy reduce-scatter using RDMA write with SEND/RECV synchronization
+ */
+static int pg_reduce_scatter_zero_copy(pg_handle_internal_t *process_group, void *send_buffer, void *receive_buffer,
+                                       int element_count, pg_datatype_t data_type, pg_operation_t reduction_op) {
+  int group_size = process_group->process_group_size;
+  int process_rank = process_group->process_rank;
+
+  if (group_size <= 0) {
+    return PG_ERROR;
+  }
+
+  if (group_size == 1) {
+    size_t element_size = pg_get_datatype_element_size(data_type);
+    memcpy(receive_buffer, send_buffer, (size_t)element_count * element_size);
+    return PG_SUCCESS;
+  }
+
+  if (!process_group->remote_buffer_addrs || !process_group->remote_buffer_rkeys) {
+    return PG_ERROR;
+  }
+
+  size_t element_size = pg_get_datatype_element_size(data_type);
+  size_t total_bytes = (size_t)element_count * element_size;
+  if (total_bytes == 0) {
+    return PG_SUCCESS;
+  }
+
+  size_t chunk_bytes = (size_t)(element_count / group_size) * element_size;
+  if (chunk_bytes == 0) {
+    return PG_ERROR;
+  }
+
+  size_t required_bytes = chunk_bytes * (size_t)group_size;
+  if (required_bytes > process_group->remote_buffer_size) {
+    return PG_ERROR;
+  }
+
+  memcpy(process_group->right_send_buffer, send_buffer, total_bytes);
+
+  char *local_work_buffer = (char *)process_group->right_send_buffer;
+  char *incoming_buffer = (char *)process_group->right_receive_buffer;
+  pg_control_msg_t *control_slots = (pg_control_msg_t *)process_group->left_receive_buffer;
+
+  const int right_neighbor = (process_rank + 1) % group_size;
+  const int steps = group_size - 1;
+  int chunk_elements = (int)(chunk_bytes / element_size);
+
+  for (int step = 0; step < steps; ++step) {
+    int send_chunk_index = (process_rank - step + group_size) % group_size;
+    int recv_chunk_index = (process_rank - step - 1 + group_size) % group_size;
+
+    size_t send_offset = (size_t)send_chunk_index * chunk_bytes;
+    size_t recv_offset = (size_t)recv_chunk_index * chunk_bytes;
+
+    pg_control_msg_t *control_slot = &control_slots[step];
+    if (pg_post_control_receive(process_group, control_slot, (uint32_t)step) != PG_SUCCESS) {
+      return PG_ERROR;
+    }
+
+    uint64_t remote_addr = process_group->remote_buffer_addrs[right_neighbor] + send_offset;
+    uint32_t remote_rkey = process_group->remote_buffer_rkeys[right_neighbor];
+
+    if (rdma_post_write_request(process_group->right_neighbor_qp, local_work_buffer + send_offset, chunk_bytes,
+                                process_group->right_send_mr, remote_addr, remote_rkey, (uint64_t)(0xABC00000 | step),
+                                1) != 0) {
+      return PG_ERROR;
+    }
+
+    if (pg_post_control_send(process_group, (uint32_t)step, (uint32_t)send_chunk_index) != PG_SUCCESS) {
+      return PG_ERROR;
+    }
+
+    int write_done = 0;
+    int send_done = 0;
+    int control_done = 0;
+
+    while (!write_done || !send_done || !control_done) {
+      struct ibv_wc work_completion;
+      if (rdma_poll_for_completion(process_group->rdma_context.completion_queue, &work_completion) != PG_SUCCESS) {
+        return PG_ERROR;
+      }
+
+      if (work_completion.status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "[Process %d] RDMA completion error (opcode %d, status %d)\n", process_rank,
+                work_completion.opcode, work_completion.status);
+        return PG_ERROR;
+      }
+
+      if (work_completion.opcode == IBV_WC_RDMA_WRITE) {
+        write_done = 1;
+      } else if (work_completion.opcode == IBV_WC_SEND) {
+        send_done = 1;
+      } else if (work_completion.opcode == IBV_WC_RECV) {
+        if (WRID_KIND(work_completion.wr_id) == WRK_CTRL && WRID_CTRL_STEP(work_completion.wr_id) == (uint32_t)step) {
+          control_done = 1;
+        }
+      }
+    }
+
+    int remote_chunk_index = (int)control_slot->chunk_index;
+    size_t remote_offset = (size_t)remote_chunk_index * chunk_bytes;
+
+    char *incoming_chunk = incoming_buffer + remote_offset;
+    char *local_chunk = local_work_buffer + recv_offset;
+
+    pg_apply_reduction_operation(local_chunk, local_chunk, incoming_chunk, chunk_elements, data_type, reduction_op);
+  }
+
+  char *my_final_chunk = local_work_buffer + ((size_t)process_rank * chunk_bytes);
+  memcpy(receive_buffer, my_final_chunk, chunk_bytes);
+
+  return PG_SUCCESS;
+}
+
 /**
  * Pipelined reduce-scatter with overlapped communication and computation
  */
@@ -916,11 +1039,16 @@ int pg_reduce_scatter(pg_handle_t process_group_handle, void *send_buffer, void 
   if (total_data_size <= process_group->eager_max) {
     /* Use eager path for small messages */
     return pg_reduce_scatter_eager(process_group, send_buffer, receive_buffer, element_count, data_type, reduction_op);
-  } else {
-    /* Use pipelined path for large messages */
-    return pg_reduce_scatter_pipelined(process_group, send_buffer, receive_buffer, element_count, data_type,
-                                       reduction_op);
   }
+
+  if (pg_reduce_scatter_zero_copy(process_group, send_buffer, receive_buffer, element_count, data_type, reduction_op) ==
+      PG_SUCCESS) {
+    return PG_SUCCESS;
+  }
+
+  /* Fallback to pipelined SEND/RECV implementation */
+  return pg_reduce_scatter_pipelined(process_group, send_buffer, receive_buffer, element_count, data_type,
+                                     reduction_op);
 }
 
 /**
@@ -1011,11 +1139,6 @@ static int pg_all_gather_eager(pg_handle_internal_t *process_group, void *send_b
   memcpy(receive_buffer, process_group->right_send_buffer, total_bytes);
   return PG_SUCCESS;
 }
-
-typedef struct {
-  uint32_t step;
-  uint32_t chunk_index;
-} pg_control_msg_t;
 
 static int pg_post_control_receive(pg_handle_internal_t *process_group, pg_control_msg_t *slot, uint32_t step) {
   struct ibv_sge sge = {.addr = (uintptr_t)slot, .length = sizeof(*slot), .lkey = process_group->left_receive_mr->lkey};
