@@ -731,6 +731,21 @@ static int pg_reduce_scatter_pipelined(pg_handle_internal_t *process_group, void
   for (int communication_step = 0; communication_step < group_size - 1; communication_step++) {
     int reduction_chunk_index = process_rank;
 
+    int send_chunk_index = (process_rank - communication_step + group_size) % group_size;
+    int recv_chunk_index = (process_rank - communication_step - 1 + group_size) % group_size;
+
+    double send_sample = 0.0;
+    double local_before_sample = 0.0;
+    int can_sample = (data_type == PG_DATATYPE_DOUBLE && chunk_size_bytes >= sizeof(double));
+    if (can_sample) {
+      double *send_ptr =
+          (double *)((char *)process_group->right_send_buffer + ((size_t)send_chunk_index * chunk_size_bytes));
+      double *local_ptr =
+          (double *)((char *)process_group->right_send_buffer + ((size_t)reduction_chunk_index * chunk_size_bytes));
+      send_sample = send_ptr[0];
+      local_before_sample = local_ptr[0];
+    }
+
     /* Pipeline the communication for this step */
     for (int pipeline_chunk = 0; pipeline_chunk < num_pipeline_chunks; pipeline_chunk += max_inflight) {
       int chunks_this_batch = PG_MIN(max_inflight, num_pipeline_chunks - pipeline_chunk);
@@ -777,8 +792,28 @@ static int pg_reduce_scatter_pipelined(pg_handle_internal_t *process_group, void
 
     /* Reduce into temp buffer to avoid being clobbered by the buffer swap */
     memcpy(reduced_chunk_tmp, local_chunk_ptr, chunk_size_bytes);
+
+    double remote_sample = 0.0;
+    if (can_sample) {
+      remote_sample = ((double *)remote_chunk_ptr)[0];
+    }
+
     pg_apply_reduction_operation(reduced_chunk_tmp, reduced_chunk_tmp, remote_chunk_ptr, chunk_element_count, data_type,
                                  reduction_op);
+
+    if (can_sample) {
+      double after_reduce = ((double *)reduced_chunk_tmp)[0];
+      printf(
+          "[Process %d] RS step %d: send_chunk %d sample %.1f, recv_chunk %d sample %.1f, local_before %.1f -> "
+          "reduced %.1f\n",
+          process_rank, communication_step, send_chunk_index, send_sample, recv_chunk_index, remote_sample,
+          local_before_sample, after_reduce);
+      fflush(stdout);
+    } else {
+      printf("[Process %d] RS step %d: send_chunk %d, recv_chunk %d\n", process_rank, communication_step,
+             send_chunk_index, recv_chunk_index);
+      fflush(stdout);
+    }
 
     /* Prepare data for next communication step */
     void *tmp_buffer = process_group->right_send_buffer;
