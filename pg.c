@@ -1233,6 +1233,7 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *rec
   /* Phase 2: All-gather to distribute complete results */
   pg_handle_internal_t *process_group = (pg_handle_internal_t *)process_group_handle;
   size_t element_size = pg_get_datatype_element_size(data_type);
+  int chunk_size = element_count / process_group->process_group_size;
 
   /* Allocate temporary buffer for all-gather result */
   void *temp_buffer = malloc(element_count * element_size);
@@ -1241,7 +1242,7 @@ int pg_all_reduce(pg_handle_t process_group_handle, void *send_buffer, void *rec
     return PG_ERROR;
   }
 
-  if (pg_all_gather(process_group_handle, receive_buffer, temp_buffer, element_count, data_type) != PG_SUCCESS) {
+  if (pg_all_gather(process_group_handle, receive_buffer, temp_buffer, chunk_size, data_type) != PG_SUCCESS) {
     fprintf(stderr, "All-reduce failed during all-gather phase\n");
     free(temp_buffer);
     return PG_ERROR;
