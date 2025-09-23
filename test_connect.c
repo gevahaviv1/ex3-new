@@ -37,7 +37,7 @@
 
 #define MAX_HOSTS        64
 #define MAX_HOSTNAME_LEN 256
-#define TEST_DATA_SIZE   (8 * 1024 * 1024) /* Number of doubles per collective test (≈16 MiB) */
+#define TEST_DATA_SIZE   (10 * 1024 * 1024) /* Number of doubles per collective test (≈16 MiB) */
 
 /**
  * Print usage information for the test program
